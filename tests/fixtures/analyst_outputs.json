@@ -1,0 +1,191 @@
+{
+  "valid": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "positioning": [
+        {
+          "claim": "Atlas Notes presents a more explicit team-workspace positioning, while Beacon Docs is described mainly through its collaboration features.",
+          "claim_type": "interpretation",
+          "product_names": ["Atlas Notes", "Beacon Docs"],
+          "evidence_ids": ["E1", "E3"]
+        }
+      ],
+      "features": [
+        {
+          "claim": "Atlas Notes provides reusable templates.",
+          "claim_type": "fact",
+          "product_names": ["Atlas Notes"],
+          "evidence_ids": ["E1"]
+        },
+        {
+          "claim": "Beacon Docs provides collaborative pages and comments.",
+          "claim_type": "fact",
+          "product_names": ["Beacon Docs"],
+          "evidence_ids": ["E3"]
+        },
+        {
+          "claim": "Both products support collaborative team workflows through different feature sets.",
+          "claim_type": "interpretation",
+          "product_names": ["Atlas Notes", "Beacon Docs"],
+          "evidence_ids": ["E1", "E3"]
+        }
+      ],
+      "pricing": [
+        {
+          "claim": "Atlas Notes lists a Team plan at 12 USD per user monthly.",
+          "claim_type": "fact",
+          "product_names": ["Atlas Notes"],
+          "evidence_ids": ["E2"]
+        },
+        {
+          "claim": "Beacon Docs names a Business plan without a public price.",
+          "claim_type": "fact",
+          "product_names": ["Beacon Docs"],
+          "evidence_ids": ["E4"]
+        },
+        {
+          "claim": "Atlas Notes has more transparent public pricing in the supplied profiles.",
+          "claim_type": "interpretation",
+          "product_names": ["Atlas Notes", "Beacon Docs"],
+          "evidence_ids": ["E2", "E4"]
+        }
+      ],
+      "opportunities": [
+        {
+          "claim": "Atlas Notes could emphasize template-driven workflows, while Beacon Docs could improve pricing transparency.",
+          "claim_type": "interpretation",
+          "product_names": ["Atlas Notes", "Beacon Docs"],
+          "evidence_ids": ["E1", "E4"]
+        }
+      ],
+      "conclusion": {
+        "claim": "The supplied profiles show different collaboration strengths and different levels of pricing clarity.",
+        "claim_type": "interpretation",
+        "product_names": ["Atlas Notes", "Beacon Docs"],
+        "evidence_ids": ["E1", "E2", "E3", "E4"]
+      }
+    }
+  },
+  "semantic_unsupported": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "positioning": [],
+      "features": [
+        {
+          "claim": "Atlas Notes includes video conferencing.",
+          "claim_type": "fact",
+          "product_names": ["Atlas Notes"],
+          "evidence_ids": ["E1"]
+        },
+        {
+          "claim": "Beacon Docs provides collaborative pages and comments.",
+          "claim_type": "fact",
+          "product_names": ["Beacon Docs"],
+          "evidence_ids": ["E3"]
+        }
+      ],
+      "pricing": [],
+      "opportunities": [],
+      "conclusion": {
+        "claim": "The supplied products expose different collaboration features.",
+        "claim_type": "interpretation",
+        "product_names": ["Atlas Notes", "Beacon Docs"],
+        "evidence_ids": ["E1", "E3"]
+      }
+    }
+  },
+  "unknown_reference": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "positioning": [],
+      "features": [
+        {
+          "claim": "Atlas Notes provides an unsupported feature.",
+          "claim_type": "fact",
+          "product_names": ["Atlas Notes"],
+          "evidence_ids": ["E99"]
+        }
+      ],
+      "pricing": [],
+      "opportunities": [],
+      "conclusion": {
+        "claim": "The products differ.",
+        "claim_type": "interpretation",
+        "product_names": ["Atlas Notes", "Beacon Docs"],
+        "evidence_ids": []
+      }
+    }
+  },
+  "cross_product_reference": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "positioning": [],
+      "features": [
+        {
+          "claim": "Beacon Docs provides reusable templates.",
+          "claim_type": "fact",
+          "product_names": ["Beacon Docs"],
+          "evidence_ids": ["E1"]
+        }
+      ],
+      "pricing": [],
+      "opportunities": [],
+      "conclusion": {
+        "claim": "The products differ.",
+        "claim_type": "interpretation",
+        "product_names": ["Atlas Notes", "Beacon Docs"],
+        "evidence_ids": []
+      }
+    }
+  },
+  "fact_without_evidence": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "positioning": [],
+      "features": [
+        {
+          "claim": "Atlas Notes provides reusable templates.",
+          "claim_type": "fact",
+          "product_names": ["Atlas Notes"],
+          "evidence_ids": []
+        }
+      ],
+      "pricing": [],
+      "opportunities": [],
+      "conclusion": {
+        "claim": "The products differ.",
+        "claim_type": "interpretation",
+        "product_names": ["Atlas Notes", "Beacon Docs"],
+        "evidence_ids": []
+      }
+    }
+  },
+  "missing_product": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "positioning": [],
+      "features": [
+        {
+          "claim": "Atlas Notes provides reusable templates.",
+          "claim_type": "fact",
+          "product_names": ["Atlas Notes"],
+          "evidence_ids": ["E1"]
+        }
+      ],
+      "pricing": [],
+      "opportunities": [],
+      "conclusion": {
+        "claim": "Atlas Notes has documented capabilities.",
+        "claim_type": "interpretation",
+        "product_names": ["Atlas Notes"],
+        "evidence_ids": ["E1"]
+      }
+    }
+  },
+  "invalid_shape": {
+    "analysis": {
+      "products": ["Atlas Notes", "Beacon Docs"],
+      "features": []
+    }
+  }
+}

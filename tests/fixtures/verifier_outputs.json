@@ -1,0 +1,49 @@
+{
+  "supported": {
+    "issues": []
+  },
+  "unsupported": {
+    "issues": [
+      {
+        "issue_type": "unsupported_claim",
+        "claim_path": "features[0]",
+        "message": "E1 mentions reusable templates but does not support video conferencing.",
+        "evidence_ids": ["E1"],
+        "suggested_action": "Remove the unsupported capability or provide supporting Evidence."
+      }
+    ]
+  },
+  "conflicting": {
+    "issues": [
+      {
+        "issue_type": "conflicting_evidence",
+        "claim_path": "pricing[0]",
+        "message": "The claim says the plan is free, while E2 lists a monthly price.",
+        "evidence_ids": ["E2"],
+        "suggested_action": "Correct the price claim to match E2."
+      }
+    ]
+  },
+  "unknown_claim_path": {
+    "issues": [
+      {
+        "issue_type": "unsupported_claim",
+        "claim_path": "features[99]",
+        "message": "The path does not exist.",
+        "evidence_ids": ["E1"],
+        "suggested_action": "Use a valid claim path."
+      }
+    ]
+  },
+  "unknown_evidence": {
+    "issues": [
+      {
+        "issue_type": "unsupported_claim",
+        "claim_path": "features[0]",
+        "message": "The issue cites an unknown ID.",
+        "evidence_ids": ["E99"],
+        "suggested_action": "Use a valid Evidence ID."
+      }
+    ]
+  }
+}

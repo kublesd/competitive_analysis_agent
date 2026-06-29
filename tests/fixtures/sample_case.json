@@ -1,0 +1,141 @@
+{
+  "target_product": "Atlas Notes",
+  "competitors": [
+    "Beacon Docs"
+  ],
+  "dimensions": [
+    "features",
+    "pricing"
+  ],
+  "research_tasks": [
+    {
+      "product_name": "Atlas Notes",
+      "topic": "features",
+      "query": "Atlas Notes official features"
+    },
+    {
+      "product_name": "Atlas Notes",
+      "topic": "pricing",
+      "query": "Atlas Notes official pricing"
+    },
+    {
+      "product_name": "Beacon Docs",
+      "topic": "features",
+      "query": "Beacon Docs official features"
+    },
+    {
+      "product_name": "Beacon Docs",
+      "topic": "pricing",
+      "query": "Beacon Docs official pricing"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "E1",
+      "product_name": "Atlas Notes",
+      "topic": "features",
+      "title": "Atlas Notes Features",
+      "url": "https://example.com/atlas/features",
+      "snippet": "Atlas Notes supports shared workspaces and reusable templates.",
+      "source_type": "official",
+      "collected_at": "2026-06-11T08:00:00Z"
+    },
+    {
+      "evidence_id": "E2",
+      "product_name": "Atlas Notes",
+      "topic": "pricing",
+      "title": "Atlas Notes Pricing",
+      "url": "https://example.com/atlas/pricing",
+      "snippet": "The Team plan is listed at 12 USD per user each month.",
+      "source_type": "official",
+      "collected_at": "2026-06-11T08:01:00Z"
+    },
+    {
+      "evidence_id": "E3",
+      "product_name": "Beacon Docs",
+      "topic": "features",
+      "title": "Beacon Docs Features",
+      "url": "https://example.com/beacon/features",
+      "snippet": "Beacon Docs supports collaborative pages and comments.",
+      "source_type": "official",
+      "collected_at": "2026-06-11T08:02:00Z"
+    },
+    {
+      "evidence_id": "E4",
+      "product_name": "Beacon Docs",
+      "topic": "pricing",
+      "title": "Beacon Docs Pricing",
+      "url": "https://example.com/beacon/pricing",
+      "snippet": "The public page names a Business plan but does not list its price.",
+      "source_type": "official",
+      "collected_at": "2026-06-11T08:03:00Z"
+    }
+  ],
+  "product_profiles": [
+    {
+      "product_name": "Atlas Notes",
+      "positioning": "A collaborative workspace for small teams.",
+      "target_users": [
+        "small teams"
+      ],
+      "features": [
+        {
+          "name": "Reusable templates",
+          "description": "Teams can create pages from reusable templates.",
+          "evidence_ids": [
+            "E1"
+          ]
+        }
+      ],
+      "pricing": [
+        {
+          "plan_name": "Team",
+          "price": "12 USD per user",
+          "billing_cycle": "monthly",
+          "main_limits": [],
+          "evidence_ids": [
+            "E2"
+          ]
+        }
+      ],
+      "strengths": [
+        "Reusable templates"
+      ],
+      "limitations": []
+    },
+    {
+      "product_name": "Beacon Docs",
+      "positioning": null,
+      "target_users": [],
+      "features": [
+        {
+          "name": "Collaborative pages",
+          "description": "Users can edit pages together and leave comments.",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "pricing": [
+        {
+          "plan_name": "Business",
+          "price": null,
+          "billing_cycle": null,
+          "main_limits": [],
+          "evidence_ids": [
+            "E4"
+          ]
+        }
+      ],
+      "strengths": [],
+      "limitations": [
+        "Public pricing is unavailable in the sample evidence."
+      ]
+    }
+  ],
+  "analysis_result": null,
+  "verification_result": null,
+  "final_report": null,
+  "retry_count": 0,
+  "errors": []
+}

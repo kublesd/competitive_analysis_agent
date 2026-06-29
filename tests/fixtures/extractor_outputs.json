@@ -1,0 +1,84 @@
+{
+  "valid_atlas": {
+    "profile": {
+      "product_name": "Atlas Notes",
+      "positioning": null,
+      "target_users": [],
+      "features": [
+        {
+          "name": "Shared workspaces",
+          "description": "Teams can work together in shared workspaces.",
+          "evidence_ids": ["E1"]
+        },
+        {
+          "name": "Reusable templates",
+          "description": "Users can create content from reusable templates.",
+          "evidence_ids": ["E1"]
+        }
+      ],
+      "pricing": [
+        {
+          "plan_name": "Team",
+          "price": "12 USD per user",
+          "billing_cycle": "monthly",
+          "main_limits": [],
+          "evidence_ids": ["E2"]
+        }
+      ],
+      "strengths": [],
+      "limitations": []
+    }
+  },
+  "valid_beacon": {
+    "profile": {
+      "product_name": "Beacon Docs",
+      "positioning": null,
+      "target_users": [],
+      "features": [
+        {
+          "name": "Collaborative pages",
+          "description": "Users can edit pages together and leave comments.",
+          "evidence_ids": ["E3"]
+        }
+      ],
+      "pricing": [
+        {
+          "plan_name": "Business",
+          "price": null,
+          "billing_cycle": null,
+          "main_limits": [],
+          "evidence_ids": ["E4"]
+        }
+      ],
+      "strengths": [],
+      "limitations": []
+    }
+  },
+  "invalid_reference": {
+    "profile": {
+      "product_name": "Atlas Notes",
+      "positioning": null,
+      "target_users": [],
+      "features": [
+        {
+          "name": "Unknown feature",
+          "description": "This item cites an ID that was never supplied.",
+          "evidence_ids": ["E99"]
+        }
+      ],
+      "pricing": [],
+      "strengths": [],
+      "limitations": []
+    }
+  },
+  "invalid_shape": {
+    "profile": {
+      "product_name": "Atlas Notes",
+      "features": [
+        {
+          "name": "Reusable templates"
+        }
+      ]
+    }
+  }
+}

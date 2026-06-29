@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "competitive-analysis-agent"
+version = "0.1.0"
+description = "An incremental AI competitive analysis agent project."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "pydantic>=2.8,<3.0",
+    "langgraph>=1.2,<2.0",
+    "streamlit>=1.40,<1.41",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9.0"]
+llm = ["langchain[openai]>=1.1,<2.0"]
+
+[project.scripts]
+competitive-analysis-health = "competitive_analysis_agent.health:main"
+competitive-analysis-eval = "competitive_analysis_agent.evaluation:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = '-m "not live_llm and not live_search"'
+markers = [
+    "live_llm: 调用真实大模型 API 的集成测试",
+    "live_search: 调用真实搜索 API 的集成测试",
+]

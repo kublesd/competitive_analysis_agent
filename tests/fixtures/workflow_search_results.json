@@ -1,0 +1,30 @@
+{
+  "Atlas Notes official product features capabilities": [
+    {
+      "title": "Atlas Notes Features",
+      "url": "https://example.com/atlas/features",
+      "snippet": "Atlas Notes supports shared workspaces and reusable templates."
+    }
+  ],
+  "Atlas Notes official pricing plans price Free Plus Standard Business Enterprise": [
+    {
+      "title": "Atlas Notes Pricing",
+      "url": "https://example.com/atlas/pricing",
+      "snippet": "The Team plan is listed at 12 USD per user each month."
+    }
+  ],
+  "Beacon Docs official product features capabilities": [
+    {
+      "title": "Beacon Docs Features",
+      "url": "https://example.com/beacon/features",
+      "snippet": "Beacon Docs supports collaborative pages and comments."
+    }
+  ],
+  "Beacon Docs official pricing plans price Free Plus Standard Business Enterprise": [
+    {
+      "title": "Beacon Docs Pricing",
+      "url": "https://example.com/beacon/pricing",
+      "snippet": "The Business plan is named, but no public price is listed."
+    }
+  ]
+}

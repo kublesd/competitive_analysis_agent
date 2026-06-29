@@ -1,0 +1,53 @@
+{
+  "valid": {
+    "tasks": [
+      {
+        "product_name": "Atlas Notes",
+        "topic": "features",
+        "query": "Atlas Notes official features"
+      },
+      {
+        "product_name": "Atlas Notes",
+        "topic": "pricing",
+        "query": "Atlas Notes official pricing"
+      },
+      {
+        "product_name": "Beacon Docs",
+        "topic": "features",
+        "query": "Beacon Docs official features"
+      },
+      {
+        "product_name": "Beacon Docs",
+        "topic": "pricing",
+        "query": "Beacon Docs official pricing"
+      }
+    ]
+  },
+  "missing_coverage": {
+    "tasks": [
+      {
+        "product_name": "Atlas Notes",
+        "topic": "features",
+        "query": "Atlas Notes official features"
+      },
+      {
+        "product_name": "Atlas Notes",
+        "topic": "pricing",
+        "query": "Atlas Notes official pricing"
+      },
+      {
+        "product_name": "Beacon Docs",
+        "topic": "features",
+        "query": "Beacon Docs official features"
+      }
+    ]
+  },
+  "invalid_shape": {
+    "tasks": [
+      {
+        "product_name": "Atlas Notes",
+        "topic": "features"
+      }
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "Atlas Notes official product features capabilities": [
+    {
+      "title": "Atlas Notes Overview",
+      "url": "https://example.com/atlas/overview",
+      "snippet": "Atlas Notes combines documents, search, and team knowledge."
+    },
+    {
+      "title": "Atlas Notes Features",
+      "url": "https://example.com/atlas/features",
+      "snippet": "Feature documentation for collaborative notes and permissions."
+    }
+  ],
+  "Atlas Notes official pricing plans price Free Plus Standard Business Enterprise": [
+    {
+      "title": "Atlas Notes Overview Duplicate",
+      "url": "https://example.com/atlas/overview?utm_source=pricing",
+      "snippet": "The same overview page appears in another task."
+    },
+    {
+      "title": "Atlas Notes Pricing",
+      "url": "https://example.com/atlas/pricing",
+      "snippet": "Pricing plans for individuals and teams."
+    }
+  ],
+  "Beacon Docs official product features capabilities": [
+    {
+      "title": "Beacon Docs Features",
+      "url": "https://example.com/beacon/features",
+      "snippet": "Beacon Docs provides publishing and knowledge-base features."
+    }
+  ]
+}

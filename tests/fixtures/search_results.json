@@ -1,0 +1,29 @@
+{
+  "Atlas Notes pricing": [
+    {
+      "title": "Atlas Notes Pricing",
+      "url": "https://EXAMPLE.com/atlas/pricing/?utm_source=test#plans",
+      "snippet": "Atlas Notes publishes its current plans on this page."
+    },
+    {
+      "title": "Duplicate Atlas Pricing",
+      "url": "https://example.com/atlas/pricing",
+      "snippet": "This duplicate URL should not create another result."
+    },
+    {
+      "title": "Atlas Notes Documentation",
+      "url": "https://docs.example.com/atlas/",
+      "snippet": "The documentation explains plan features."
+    },
+    {
+      "title": "Independent Atlas Review",
+      "url": "https://reviews.example.net/atlas",
+      "snippet": "An independent review of Atlas Notes."
+    },
+    {
+      "title": "Extra Result",
+      "url": "https://another.example.org/atlas",
+      "snippet": "This result should be removed by the result cap."
+    }
+  ]
+}
