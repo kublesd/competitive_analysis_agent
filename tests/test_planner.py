@@ -62,6 +62,15 @@ class FakeRawMessage:
         self.content = content
 
 
+class FailingPlannerModel:
+    """模拟真实模型客户端抛出包含敏感文本的异常。"""
+
+    def invoke(self, messages: list[dict[str, str]]) -> object:
+        """始终抛错，验证 Planner 的页面错误详情会脱敏。"""
+
+        raise RuntimeError("secret-token-must-not-be-shown")
+
+
 class PlannerTest(unittest.TestCase):
     def test_valid_output_covers_every_product_and_dimension(self) -> None:
         # 两个产品乘以两个维度，应得到四条独立调研任务。
@@ -157,6 +166,19 @@ class PlannerTest(unittest.TestCase):
 
         self.assertEqual(len(tasks), 4)
         self.assertEqual(structured_model.invocation_count, 2)
+
+    def test_model_call_failure_exposes_safe_public_detail(self) -> None:
+        # 供应商异常可能包含敏感文本，页面详情只能展示脱敏后的定位信息。
+        planner = Planner(FailingPlannerModel())
+
+        with self.assertRaises(PlannerError) as captured_error:
+            planner.plan(_build_planner_input())
+
+        public_detail = captured_error.exception.public_detail
+        self.assertIn("Planner 调用模型服务失败", public_detail)
+        self.assertIn("底层异常类型：RuntimeError", public_detail)
+        self.assertIn("2 个产品、2 个维度", public_detail)
+        self.assertNotIn("secret-token-must-not-be-shown", public_detail)
 
     def test_duplicate_dimensions_are_rejected_before_model_call(self) -> None:
         # 重复维度会制造重复任务，应在进入模型前直接拒绝。

@@ -141,7 +141,16 @@ class FakePlannerModel:
 
 
 class PlannerError(RuntimeError):
-    """表示 Planner 在有限修复后仍无法生成有效任务。"""
+    """表示 Planner 调用失败或有限修复后仍无法生成有效任务。"""
+
+    def __init__(
+        self,
+        message: str,
+        public_detail: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        # public_detail 会显示到页面，因此只保存脱敏后的定位信息。
+        self.public_detail = public_detail or message
 
 
 class PlannerValidationError(ValueError):
@@ -158,7 +167,10 @@ class Planner:
         """生成任务列表；首次校验失败时最多请求一次修复。"""
 
         initial_messages = build_planner_messages(planner_input)
-        raw_output = self._invoke_model(initial_messages)
+        raw_output = self._invoke_model(
+            messages=initial_messages,
+            planner_input=planner_input,
+        )
 
         try:
             validated_output = validate_planner_output(
@@ -173,7 +185,10 @@ class Planner:
                 raw_output=raw_output,
                 validation_error=str(first_error),
             )
-            repaired_output = self._invoke_model(repair_messages)
+            repaired_output = self._invoke_model(
+                messages=repair_messages,
+                planner_input=planner_input,
+            )
 
         try:
             validated_repair = validate_planner_output(
@@ -190,13 +205,57 @@ class Planner:
     def _invoke_model(
         self,
         messages: list[dict[str, str]],
+        planner_input: PlannerInput,
     ) -> object:
         """调用模型，并把供应商异常转换成 PlannerError。"""
 
         try:
             return self._model.invoke(messages)
         except Exception as error:
-            raise PlannerError(f"Planner model call failed: {error}") from error
+            public_detail = build_model_call_failure_detail(
+                planner_input=planner_input,
+                error=error,
+            )
+            raise PlannerError(
+                f"Planner model call failed: {error}",
+                public_detail=public_detail,
+            ) from error
+
+
+def build_model_call_failure_detail(
+    planner_input: PlannerInput,
+    error: Exception,
+) -> str:
+    """生成可展示到 UI 的模型失败摘要，不包含供应商原始错误文本。"""
+
+    product_count = len(planner_input.products)
+    dimension_count = len(planner_input.dimensions)
+    expected_task_count = product_count * dimension_count
+    error_type = type(error).__name__
+    error_text = str(error).lower()
+
+    if "401" in error_text or "invalid token" in error_text:
+        reason = (
+            "模型服务认证失败，通常是 LLM_API_KEY 无效、过期，"
+            "或应用仍在使用旧的环境变量值。"
+        )
+        next_step = "请更新 .env.example 中的 LLM_API_KEY 后重新启动应用。"
+    else:
+        reason = (
+            "模型服务调用失败，可能是网络、超时、额度、模型名称或接口兼容性问题。"
+        )
+        next_step = (
+            "请检查 LLM_BASE_URL、LLM_MODEL、额度和网络连通性后重试。"
+        )
+
+    return (
+        "Planner 调用模型服务失败。"
+        f"底层异常类型：{error_type}。"
+        f"{reason}"
+        f"本次输入包含 {product_count} 个产品、{dimension_count} 个维度，"
+        f"预计生成 {expected_task_count} 条调研任务。"
+        f"{next_step}"
+    )
 
 
 def build_planner_messages(
