@@ -9,9 +9,11 @@ description = "An incremental AI competitive analysis agent project."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
+    "fastapi>=0.115,<1.0",
     "pydantic>=2.8,<3.0",
     "langgraph>=1.2,<2.0",
     "streamlit>=1.40,<1.41",
+    "uvicorn>=0.30,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +21,7 @@ dev = ["pytest>=8.0,<9.0"]
 llm = ["langchain[openai]>=1.1,<2.0"]
 
 [project.scripts]
+competitive-analysis-api = "competitive_analysis_agent.api_app:main"
 competitive-analysis-health = "competitive_analysis_agent.health:main"
 competitive-analysis-eval = "competitive_analysis_agent.evaluation:main"
 
