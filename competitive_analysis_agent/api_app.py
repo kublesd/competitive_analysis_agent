@@ -129,7 +129,10 @@ def create_app(
 ) -> FastAPI:
     """创建 FastAPI 应用；测试可以注入假的分析函数。"""
 
-    current_analysis_runner = analysis_runner or ui_service.run_analysis
+    if analysis_runner is None:
+        current_analysis_runner = run_api_analysis
+    else:
+        current_analysis_runner = analysis_runner
     lifespan = create_lifespan() if configure_logging else None
     app = FastAPI(
         title="Competitive Analysis Agent API",
@@ -166,6 +169,17 @@ def create_app(
         return ApiAnalysisResponse.from_run_result(result)
 
     return app
+
+
+def run_api_analysis(
+    request: ui_service.AnalysisRequest,
+) -> ui_service.AnalysisRunResult:
+    """使用 API 入口标记运行共享分析服务。"""
+
+    return ui_service.run_analysis(
+        request,
+        entrypoint="api",
+    )
 
 
 def create_lifespan() -> Callable[[FastAPI], AsyncIterator[None]]:

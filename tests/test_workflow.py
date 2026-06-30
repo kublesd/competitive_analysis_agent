@@ -2,7 +2,9 @@ import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 
+from competitive_analysis_agent.agent_hooks import AgentRunContext, HookManager
 from competitive_analysis_agent.analyst import Analyst, FakeAnalystModel
 from competitive_analysis_agent.extractor import (
     Extractor,
@@ -70,6 +72,50 @@ class StaticExtractor:
         """忽略输入并返回测试画像，模拟上游漏掉的污染情况。"""
 
         return self.profiles
+
+
+class StageStartRecorder:
+    """记录工作流阶段开始事件，用于验证重试 attempt_index。"""
+
+    def __init__(self) -> None:
+        self.started_stages: list[tuple[str, int]] = []
+
+    def on_run_started(self, context) -> None:
+        """本测试只关心阶段事件。"""
+
+    def on_stage_started(
+        self,
+        run_context,
+        stage_context,
+        input_summary,
+    ) -> None:
+        """记录阶段名称和尝试次数。"""
+
+        self.started_stages.append(
+            (stage_context.stage_name, stage_context.attempt_index)
+        )
+
+    def on_stage_completed(
+        self,
+        run_context,
+        stage_context,
+        output_summary,
+    ) -> None:
+        """本测试只关心阶段开始事件。"""
+
+    def on_stage_failed(
+        self,
+        run_context,
+        stage_context,
+        error_summary,
+    ) -> None:
+        """本测试不触发失败事件。"""
+
+    def on_run_completed(self, context, result_summary) -> None:
+        """本测试只关心阶段事件。"""
+
+    def on_run_failed(self, context, error_summary) -> None:
+        """本测试不触发失败事件。"""
 
 
 def _build_components(
@@ -196,7 +242,19 @@ class WorkflowTest(unittest.TestCase):
                 verifier_outputs["supported"],
             ],
         )
-        graph = create_workflow_graph(components)
+        stage_recorder = StageStartRecorder()
+        hook_manager = HookManager(
+            run_context=AgentRunContext(
+                analysis_id="retry-test",
+                entrypoint="test",
+                started_at=perf_counter(),
+            ),
+            hooks=[stage_recorder],
+        )
+        graph = create_workflow_graph(
+            components,
+            hook_manager=hook_manager,
+        )
 
         final_state = graph.invoke(_build_initial_state())
 
@@ -220,6 +278,18 @@ class WorkflowTest(unittest.TestCase):
         revision_message = analyst_model.received_messages[1][1]["content"]
         self.assertIn("features[0]", revision_message)
         self.assertIn("unsupported_claim", revision_message)
+        analyst_attempts = [
+            attempt
+            for stage_name, attempt in stage_recorder.started_stages
+            if stage_name == "analyst"
+        ]
+        verifier_attempts = [
+            attempt
+            for stage_name, attempt in stage_recorder.started_stages
+            if stage_name == "verifier"
+        ]
+        self.assertEqual(analyst_attempts, [1, 2])
+        self.assertEqual(verifier_attempts, [1, 2])
 
     def test_revision_feedback_does_not_copy_suggested_action(self) -> None:
         # Verifier 的 suggested_action 可能带偏模型，Workflow 只传保守修订规则。

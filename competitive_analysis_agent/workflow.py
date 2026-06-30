@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+import logging
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from competitive_analysis_agent.agent_hooks import HookManager
 from competitive_analysis_agent.analyst import (
     Analyst,
     AnalystInput,
@@ -39,10 +42,12 @@ from competitive_analysis_agent.verifier import (
     Verifier,
     VerifierInput,
 )
+from competitive_analysis_agent.observability import StagePayloadSummarizer
 
 
 MAX_ANALYSIS_RETRIES = 1
 RouteName = Literal["retry_analyst", "reporter"]
+LOGGER = logging.getLogger(__name__)
 
 
 class WorkflowGraphState(TypedDict):
@@ -63,6 +68,9 @@ class WorkflowGraphState(TypedDict):
     retry_count: int
     retry_pending: bool
     stage_history: list[str]
+
+
+WorkflowNodeRunner = Callable[[WorkflowGraphState], dict[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,35 +486,67 @@ def build_revision_guidance(claim_path: str, issue_type: str) -> str:
 
 def create_workflow_graph(
     components: WorkflowComponents,
+    hook_manager: HookManager | None = None,
 ) -> CompiledStateGraph:
     """创建并编译带一次受限验证回路的 LangGraph。"""
 
     graph_builder = StateGraph(WorkflowGraphState)
+    summarizer = StagePayloadSummarizer() if hook_manager is not None else None
 
     # node 只做依赖注入和部分 State 更新，业务逻辑仍保留在独立组件中。
     graph_builder.add_node(
         "planner",
-        lambda state: run_planner_node(state, components.planner),
+        build_observed_node(
+            "planner",
+            lambda state: run_planner_node(state, components.planner),
+            hook_manager,
+            summarizer,
+        ),
     )
     graph_builder.add_node(
         "researcher",
-        lambda state: run_researcher_node(state, components.researcher),
+        build_observed_node(
+            "researcher",
+            lambda state: run_researcher_node(state, components.researcher),
+            hook_manager,
+            summarizer,
+        ),
     )
     graph_builder.add_node(
         "extractor",
-        lambda state: run_extractor_node(state, components.extractor),
+        build_observed_node(
+            "extractor",
+            lambda state: run_extractor_node(state, components.extractor),
+            hook_manager,
+            summarizer,
+        ),
     )
     graph_builder.add_node(
         "analyst",
-        lambda state: run_analyst_node(state, components.analyst),
+        build_observed_node(
+            "analyst",
+            lambda state: run_analyst_node(state, components.analyst),
+            hook_manager,
+            summarizer,
+        ),
     )
     graph_builder.add_node(
         "verifier",
-        lambda state: run_verifier_node(state, components.verifier),
+        build_observed_node(
+            "verifier",
+            lambda state: run_verifier_node(state, components.verifier),
+            hook_manager,
+            summarizer,
+        ),
     )
     graph_builder.add_node(
         "reporter",
-        lambda state: run_reporter_node(state, components.reporter),
+        build_observed_node(
+            "reporter",
+            lambda state: run_reporter_node(state, components.reporter),
+            hook_manager,
+            summarizer,
+        ),
     )
 
     graph_builder.add_edge(START, "planner")
@@ -525,3 +565,100 @@ def create_workflow_graph(
     graph_builder.add_edge("reporter", END)
 
     return graph_builder.compile(name="competitive-analysis-workflow")
+
+
+def build_observed_node(
+    stage_name: str,
+    node_runner: WorkflowNodeRunner,
+    hook_manager: HookManager | None,
+    summarizer: StagePayloadSummarizer | None,
+) -> WorkflowNodeRunner:
+    """为 LangGraph 节点增加 Hook 调用，不改变节点业务函数。"""
+
+    if hook_manager is None or summarizer is None:
+        return node_runner
+
+    def observed_node(state: WorkflowGraphState) -> dict[str, object]:
+        retry_count = int(state["retry_count"])
+        stage_context = hook_manager.create_stage_context(
+            stage_name=stage_name,
+            retry_count=retry_count,
+        )
+        input_summary = build_safe_stage_summary(
+            summarizer=summarizer,
+            stage_name=stage_name,
+            state=state,
+            direction="input",
+        )
+        hook_manager.on_stage_started(stage_context, input_summary)
+
+        try:
+            update = node_runner(state)
+        except Exception as error:
+            error_summary = build_safe_error_summary(
+                summarizer=summarizer,
+                error=error,
+                failed_stage=stage_name,
+            )
+            hook_manager.on_stage_failed(stage_context, error_summary)
+            raise
+
+        output_state = dict(state)
+        output_state.update(update)
+        output_summary = build_safe_stage_summary(
+            summarizer=summarizer,
+            stage_name=stage_name,
+            state=output_state,
+            direction="output",
+        )
+        hook_manager.on_stage_completed(stage_context, output_summary)
+        return update
+
+    return observed_node
+
+
+def build_safe_stage_summary(
+    summarizer: StagePayloadSummarizer,
+    stage_name: str,
+    state: Mapping[str, object],
+    direction: Literal["input", "output"],
+) -> dict[str, object]:
+    """构建阶段摘要；摘要失败时不影响主工作流。"""
+
+    try:
+        if direction == "input":
+            return summarizer.build_stage_input_summary(stage_name, state)
+        return summarizer.build_stage_output_summary(stage_name, state)
+    except Exception as error:
+        LOGGER.warning(
+            "hook_summary_failed stage=%s direction=%s error_type=%s",
+            stage_name,
+            direction,
+            type(error).__name__,
+        )
+        return {"summary_error_type": type(error).__name__}
+
+
+def build_safe_error_summary(
+    summarizer: StagePayloadSummarizer,
+    error: Exception,
+    failed_stage: str,
+) -> dict[str, object]:
+    """构建脱敏错误摘要；摘要失败时仍保留异常类型。"""
+
+    try:
+        return summarizer.build_error_summary(
+            error=error,
+            failed_stage=failed_stage,
+        )
+    except Exception as summary_error:
+        LOGGER.warning(
+            "hook_error_summary_failed failed_stage=%s error_type=%s",
+            failed_stage,
+            type(summary_error).__name__,
+        )
+        return {
+            "error_type": type(error).__name__,
+            "failed_stage": failed_stage,
+            "summary_error_type": type(summary_error).__name__,
+        }

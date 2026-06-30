@@ -192,6 +192,16 @@ logs/application.log
 脱敏异常类别。单个日志文件达到 5 MB 后自动轮转，保留 3 个历史文件。日志不会主动
 记录 API Key、Prompt、Evidence 正文或官方域名；`logs/` 已加入 `.gitignore`。
 
+Agent 生命周期事件会额外写入机器可读 JSONL：
+
+```text
+logs/agent-events.jsonl
+```
+
+每行是一条固定字段事件，包含 `event_type`、`analysis_id`、`entrypoint`、`stage`、
+`status`、`duration_ms` 和脱敏 `summary`。默认启用本地 `JsonlLoggingHook`，并支持在
+测试或未来入口中注入额外 Hook；Hook 自身失败只写 `hook_failed`，不会中断分析流程。
+
 运行默认离线测试：
 
 ```powershell
@@ -228,6 +238,7 @@ Tavily credits。
 - [Stage 12 真实搜索设计笔记](docs/stage-notes/stage-12-real-search-provider.md)
 - [Stage 13 后台日志设计笔记](docs/stage-notes/stage-13-backend-logging.md)
 - [Stage 14 FastAPI 服务层设计笔记](docs/stage-notes/stage-14-fastapi-service-layer.md)
+- [Stage 15 Agent Hooks 日志设计笔记](docs/stage-notes/stage-15-agent-hooks-logging.md)
 
 ## Reliability
 
@@ -247,6 +258,8 @@ Tavily credits。
 - 每次 UI 分析生成独立 `analysis_id`，后台日志记录阶段轨迹、耗时与结果统计。
 - FastAPI 入口复用同一应用服务，请求校验失败返回 422，配置缺失返回 503，内部异常返回
   脱敏后的 500 错误体。
+- Agent Hooks 统一记录 run/stage 生命周期，业务节点不直接写结构化日志；JSONL 事件只保存
+  数量、ID、状态和脱敏摘要，不保存 Prompt、模型原始响应、Evidence 正文或完整报告。
 
 ## Limitations
 
@@ -273,6 +286,8 @@ competitive_analysis_agent/
   verifier.py             # 引用与语义验证
   reporter.py             # Markdown 报告
   workflow.py             # LangGraph 编排
+  agent_hooks.py          # Agent 生命周期 Hook 协议与调度
+  observability.py        # 脱敏摘要与 JSONL 日志 Hook
   application_workflow.py # 真实模型与 Tavily 组件装配
   logging_config.py       # 控制台与轮转文件日志
   evaluation.py           # 固定案例和指标

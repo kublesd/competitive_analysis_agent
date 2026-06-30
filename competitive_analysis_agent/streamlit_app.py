@@ -120,6 +120,7 @@ def run_submitted_analysis(
         result = ui_service.run_analysis(
             analysis_request,
             progress_callback=update_progress,
+            entrypoint="streamlit",
         )
     except Exception as error:
         LOGGER.warning(

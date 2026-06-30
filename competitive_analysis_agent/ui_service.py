@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
 import logging
 import re
 from time import perf_counter
@@ -12,11 +11,20 @@ from uuid import uuid4
 
 from pydantic import Field, model_validator
 
+from competitive_analysis_agent.agent_hooks import (
+    AgentHook,
+    AgentRunContext,
+    HookManager,
+)
 from competitive_analysis_agent.application_workflow import (
     ApplicationSearchConfigurationError,
     create_application_workflow_components,
 )
 from competitive_analysis_agent.live_config import load_live_settings
+from competitive_analysis_agent.observability import (
+    JsonlLoggingHook,
+    StagePayloadSummarizer,
+)
 from competitive_analysis_agent.planner import PlannerInput
 from competitive_analysis_agent.researcher import ResearchError
 from competitive_analysis_agent.schemas import (
@@ -28,7 +36,6 @@ from competitive_analysis_agent.verifier import VerificationResult
 from competitive_analysis_agent.workflow import (
     WorkflowComponents,
     WorkflowGraphState,
-    build_revision_feedback,
     create_initial_state,
     create_workflow_graph,
 )
@@ -75,7 +82,6 @@ NEXT_STAGE_AFTER_SUCCESS = {
 
 ProgressCallback = Callable[[str], None]
 LOGGER = logging.getLogger(__name__)
-STAGE_IO_ITEM_LIMIT = 8
 STAGE_IO_TEXT_PREVIEW_LIMIT = 500
 WIDE_ANALYSIS_DIMENSION_THRESHOLD = 5
 VERY_WIDE_ANALYSIS_DIMENSION_THRESHOLD = 7
@@ -242,27 +248,39 @@ def run_analysis(
     analysis_request: AnalysisRequest,
     progress_callback: ProgressCallback | None = None,
     components: WorkflowComponents | None = None,
+    *,
+    entrypoint: str = "service",
+    hooks: list[AgentHook] | None = None,
 ) -> AnalysisRunResult:
     """运行 UI 提交的真实搜索分析，并通过回调报告节点进度。"""
 
     analysis_id = uuid4().hex[:12]
     started_at = perf_counter()
+    hook_manager = build_hook_manager(
+        analysis_id=analysis_id,
+        entrypoint=entrypoint,
+        started_at=started_at,
+        analysis_request=analysis_request,
+        hooks=hooks,
+    )
+    event_summarizer = StagePayloadSummarizer()
     LOGGER.info(
         "analysis_started analysis_id=%s competitor_count=%d "
-        "dimension_count=%d official_domain_product_count=%d",
+        "dimension_count=%d official_domain_product_count=%d entrypoint=%s",
         analysis_id,
         len(analysis_request.competitors),
         len(analysis_request.dimensions),
         len(analysis_request.official_domains_by_product),
+        entrypoint,
     )
+    hook_manager.on_run_started()
 
     try:
         result = _run_analysis_workflow(
             analysis_request=analysis_request,
             progress_callback=progress_callback,
             components=components,
-            analysis_id=analysis_id,
-            started_at=started_at,
+            hook_manager=hook_manager,
         )
     except Exception as error:
         elapsed_seconds = perf_counter() - started_at
@@ -286,6 +304,11 @@ def run_analysis(
             failure_line,
             elapsed_seconds,
         )
+        error_summary = event_summarizer.build_error_summary(
+            error=error,
+            failed_stage=failed_stage,
+        )
+        hook_manager.on_run_failed(error_summary)
         raise
 
     elapsed_seconds = perf_counter() - started_at
@@ -300,7 +323,62 @@ def run_analysis(
         len(result.research_errors),
         result.verification_result.passed,
     )
+    hook_manager.on_run_completed(
+        build_run_result_summary(result)
+    )
     return result
+
+
+def build_hook_manager(
+    analysis_id: str,
+    entrypoint: str,
+    started_at: float,
+    analysis_request: AnalysisRequest,
+    hooks: list[AgentHook] | None,
+) -> HookManager:
+    """创建一次运行的 HookManager，并默认启用本地 JSONL 日志 Hook。"""
+
+    run_context = AgentRunContext(
+        analysis_id=analysis_id,
+        entrypoint=entrypoint,
+        started_at=started_at,
+        configuration_summary=build_run_configuration_summary(
+            analysis_request
+        ),
+    )
+    active_hooks: list[AgentHook] = [JsonlLoggingHook()]
+    active_hooks.extend(hooks or [])
+    return HookManager(run_context=run_context, hooks=active_hooks)
+
+
+def build_run_configuration_summary(
+    analysis_request: AnalysisRequest,
+) -> dict[str, object]:
+    """生成运行开始事件使用的脱敏配置摘要。"""
+
+    return {
+        "target_product": analysis_request.target_product,
+        "competitor_count": len(analysis_request.competitors),
+        "dimensions": list(analysis_request.dimensions),
+        "dimension_count": len(analysis_request.dimensions),
+        "official_domain_product_count": len(
+            analysis_request.official_domains_by_product
+        ),
+    }
+
+
+def build_run_result_summary(
+    result: AnalysisRunResult,
+) -> dict[str, object]:
+    """生成运行完成事件使用的结果摘要。"""
+
+    return {
+        "stage_count": len(result.stage_history),
+        "stage_history": list(result.stage_history),
+        "evidence_count": len(result.evidence),
+        "research_error_count": len(result.research_errors),
+        "verification_passed": result.verification_result.passed,
+    }
 
 
 def _describe_failure_location(error: Exception) -> tuple[str, str]:
@@ -367,17 +445,19 @@ def _run_analysis_workflow(
     analysis_request: AnalysisRequest,
     progress_callback: ProgressCallback | None,
     components: WorkflowComponents | None,
-    analysis_id: str,
-    started_at: float,
+    hook_manager: HookManager | None,
 ) -> AnalysisRunResult:
-    """执行原有工作流，并在每个 State 快照后记录阶段元数据。"""
+    """执行原有工作流，并通过 HookManager 记录阶段生命周期。"""
 
     current_components = components
     if current_components is None:
         settings = load_live_settings()
         current_components = create_application_workflow_components(settings)
 
-    graph = create_workflow_graph(current_components)
+    graph = create_workflow_graph(
+        current_components,
+        hook_manager=hook_manager,
+    )
     planner_input = PlannerInput(
         target_product=analysis_request.target_product,
         competitors=analysis_request.competitors,
@@ -395,7 +475,6 @@ def _run_analysis_workflow(
 
     # values 模式在每个节点后返回完整 State，页面可显示进度并取得最终结果。
     final_state: WorkflowGraphState | None = None
-    previous_state: WorkflowGraphState | None = initial_state
     reported_stage_count = 0
     try:
         for state_snapshot in graph.stream(
@@ -406,30 +485,9 @@ def _run_analysis_workflow(
             stage_history = state_snapshot["stage_history"]
             new_stages = stage_history[reported_stage_count:]
             for stage_name in new_stages:
-                elapsed_seconds = perf_counter() - started_at
-                log_stage_io(
-                    analysis_id=analysis_id,
-                    stage_name=stage_name,
-                    input_state=previous_state,
-                    output_state=state_snapshot,
-                )
-                LOGGER.info(
-                    "analysis_stage_completed analysis_id=%s stage=%s "
-                    "elapsed_seconds=%.3f task_count=%d evidence_count=%d "
-                    "profile_count=%d research_error_count=%d retry_count=%d",
-                    analysis_id,
-                    stage_name,
-                    elapsed_seconds,
-                    len(state_snapshot["research_tasks"]),
-                    len(state_snapshot["evidence"]),
-                    len(state_snapshot["product_profiles"]),
-                    len(state_snapshot["research_errors"]),
-                    state_snapshot["retry_count"],
-                )
                 if progress_callback is not None:
                     progress_callback(stage_name)
             reported_stage_count = len(stage_history)
-            previous_state = state_snapshot
     except Exception as error:
         attach_workflow_failure_context(error, final_state)
         raise
@@ -464,419 +522,6 @@ def choose_max_results_per_task(dimensions: list[str]) -> int:
     if dimension_count >= WIDE_ANALYSIS_DIMENSION_THRESHOLD:
         return 2
     return 3
-
-
-def log_stage_io(
-    analysis_id: str,
-    stage_name: str,
-    input_state: WorkflowGraphState | None,
-    output_state: WorkflowGraphState,
-) -> None:
-    """记录某个阶段的输入和输出摘要，避免日志里出现完整网页正文。"""
-
-    if input_state is not None:
-        log_stage_payload(
-            analysis_id=analysis_id,
-            stage_name=stage_name,
-            direction="input",
-            payload=build_stage_input_payload(stage_name, input_state),
-        )
-    log_stage_payload(
-        analysis_id=analysis_id,
-        stage_name=stage_name,
-        direction="output",
-        payload=build_stage_output_payload(stage_name, output_state),
-    )
-
-
-def log_stage_payload(
-    analysis_id: str,
-    stage_name: str,
-    direction: str,
-    payload: dict[str, object],
-) -> None:
-    """把阶段 I/O payload 写成单行 JSON，便于按 analysis_id 搜索。"""
-
-    try:
-        payload_json = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-    except Exception as error:
-        LOGGER.warning(
-            "analysis_stage_io_skipped analysis_id=%s stage=%s "
-            "direction=%s error_type=%s",
-            analysis_id,
-            stage_name,
-            direction,
-            type(error).__name__,
-        )
-        return
-
-    LOGGER.info(
-        "analysis_stage_io analysis_id=%s stage=%s direction=%s "
-        "payload_json=%s",
-        analysis_id,
-        stage_name,
-        direction,
-        payload_json,
-    )
-
-
-def build_stage_input_payload(
-    stage_name: str,
-    state: WorkflowGraphState,
-) -> dict[str, object]:
-    """按阶段提取即将交给节点的输入契约。"""
-
-    if stage_name == "planner":
-        return {
-            "target_product": state["target_product"],
-            "competitors": list(state["competitors"]),
-            "dimensions": list(state["dimensions"]),
-        }
-
-    if stage_name == "researcher":
-        return {
-            "research_tasks": summarize_research_tasks(
-                state["research_tasks"]
-            ),
-            "official_domains_by_product": (
-                state["official_domains_by_product"]
-            ),
-            "max_results_per_task": state["max_results_per_task"],
-        }
-
-    if stage_name == "extractor":
-        return {
-            "evidence": summarize_evidence_items(state["evidence"]),
-        }
-
-    if stage_name == "analyst":
-        return {
-            "product_profiles": summarize_product_profiles(
-                state["product_profiles"]
-            ),
-            "revision_feedback": summarize_text_items(
-                build_revision_feedback(state["verification_result"])
-            ),
-            "retry_count": state["retry_count"],
-        }
-
-    if stage_name == "verifier":
-        return {
-            "analysis_result": summarize_analysis(
-                state["analysis_result"]
-            ),
-            "evidence": summarize_evidence_items(state["evidence"]),
-        }
-
-    if stage_name == "reporter":
-        return {
-            "analysis_result": summarize_analysis(
-                state["analysis_result"]
-            ),
-            "product_profiles": summarize_product_profiles(
-                state["product_profiles"]
-            ),
-            "verification_result": summarize_verification_result(
-                state["verification_result"]
-            ),
-            "research_errors": summarize_research_errors(
-                state["research_errors"]
-            ),
-            "evidence": summarize_evidence_items(state["evidence"]),
-        }
-
-    return {"stage_history": list(state["stage_history"])}
-
-
-def build_stage_output_payload(
-    stage_name: str,
-    state: WorkflowGraphState,
-) -> dict[str, object]:
-    """按阶段提取节点完成后写入 State 的输出契约。"""
-
-    if stage_name == "planner":
-        return {
-            "research_tasks": summarize_research_tasks(
-                state["research_tasks"]
-            ),
-        }
-
-    if stage_name == "researcher":
-        return {
-            "evidence": summarize_evidence_items(state["evidence"]),
-            "research_errors": summarize_research_errors(
-                state["research_errors"]
-            ),
-        }
-
-    if stage_name == "extractor":
-        return {
-            "product_profiles": summarize_product_profiles(
-                state["product_profiles"]
-            ),
-        }
-
-    if stage_name == "analyst":
-        return {
-            "analysis_result": summarize_analysis(
-                state["analysis_result"]
-            ),
-            "retry_pending": state["retry_pending"],
-        }
-
-    if stage_name == "verifier":
-        return {
-            "verification_result": summarize_verification_result(
-                state["verification_result"]
-            ),
-            "retry_count": state["retry_count"],
-            "retry_pending": state["retry_pending"],
-        }
-
-    if stage_name == "reporter":
-        final_report = state["final_report"] or ""
-        return {
-            "final_report_chars": len(final_report),
-            "final_report_preview": truncate_text(final_report),
-        }
-
-    return {"stage_history": list(state["stage_history"])}
-
-
-def summarize_research_tasks(tasks: list[object]) -> dict[str, object]:
-    """摘要 ResearchTask 列表，保留产品、主题和查询文本。"""
-
-    items: list[dict[str, object]] = []
-    for task in tasks[:STAGE_IO_ITEM_LIMIT]:
-        items.append(
-            {
-                "product_name": getattr(task, "product_name", ""),
-                "topic": getattr(task, "topic", ""),
-                "query": getattr(task, "query", ""),
-            }
-        )
-
-    return build_limited_collection_summary(items, len(tasks))
-
-
-def summarize_evidence_items(evidence_items: list[object]) -> dict[str, object]:
-    """摘要 Evidence 列表，正文只保留短预览和长度。"""
-
-    items: list[dict[str, object]] = []
-    for evidence in evidence_items[:STAGE_IO_ITEM_LIMIT]:
-        raw_content = getattr(evidence, "raw_content", None)
-        items.append(
-            {
-                "evidence_id": getattr(evidence, "evidence_id", ""),
-                "product_name": getattr(evidence, "product_name", ""),
-                "topic": getattr(evidence, "topic", ""),
-                "source_type": getattr(evidence, "source_type", ""),
-                "title": truncate_text(getattr(evidence, "title", "")),
-                "url": str(getattr(evidence, "url", "")),
-                "snippet_preview": truncate_text(
-                    getattr(evidence, "snippet", "")
-                ),
-                "raw_content_chars": len(raw_content or ""),
-                "raw_content_preview": truncate_text(raw_content or ""),
-            }
-        )
-
-    return build_limited_collection_summary(items, len(evidence_items))
-
-
-def summarize_product_profiles(profiles: list[object]) -> dict[str, object]:
-    """摘要产品画像，便于观察 Extractor 输出是否缺字段。"""
-
-    items: list[dict[str, object]] = []
-    for profile in profiles[:STAGE_IO_ITEM_LIMIT]:
-        items.append(
-            {
-                "product_name": getattr(profile, "product_name", ""),
-                "positioning": truncate_text(
-                    getattr(profile, "positioning", "") or ""
-                ),
-                "target_users": summarize_text_items(
-                    getattr(profile, "target_users", [])
-                ),
-                "features": summarize_feature_items(
-                    getattr(profile, "features", [])
-                ),
-                "pricing": summarize_pricing_plans(
-                    getattr(profile, "pricing", [])
-                ),
-                "limitations": summarize_text_items(
-                    getattr(profile, "limitations", [])
-                ),
-            }
-        )
-
-    return build_limited_collection_summary(items, len(profiles))
-
-
-def summarize_feature_items(features: list[object]) -> dict[str, object]:
-    """摘要功能项，保留名称、短描述和引用。"""
-
-    items: list[dict[str, object]] = []
-    for feature in features[:STAGE_IO_ITEM_LIMIT]:
-        items.append(
-            {
-                "name": getattr(feature, "name", ""),
-                "description": truncate_text(
-                    getattr(feature, "description", "")
-                ),
-                "evidence_ids": list(getattr(feature, "evidence_ids", [])),
-            }
-        )
-
-    return build_limited_collection_summary(items, len(features))
-
-
-def summarize_pricing_plans(pricing_plans: list[object]) -> dict[str, object]:
-    """摘要价格项，保留方案名、价格、周期、限制和引用。"""
-
-    items: list[dict[str, object]] = []
-    for pricing_plan in pricing_plans[:STAGE_IO_ITEM_LIMIT]:
-        items.append(
-            {
-                "plan_name": getattr(pricing_plan, "plan_name", ""),
-                "price": getattr(pricing_plan, "price", None),
-                "billing_cycle": getattr(pricing_plan, "billing_cycle", None),
-                "main_limits": summarize_text_items(
-                    getattr(pricing_plan, "main_limits", [])
-                ),
-                "evidence_ids": list(
-                    getattr(pricing_plan, "evidence_ids", [])
-                ),
-            }
-        )
-
-    return build_limited_collection_summary(items, len(pricing_plans))
-
-
-def summarize_analysis(analysis: object | None) -> dict[str, object] | None:
-    """摘要 Analyst 输出，保留各章节 claim 和 Evidence ID。"""
-
-    if analysis is None:
-        return None
-
-    return {
-        "products": list(getattr(analysis, "products", [])),
-        "positioning": summarize_claims(getattr(analysis, "positioning", [])),
-        "features": summarize_claims(getattr(analysis, "features", [])),
-        "pricing": summarize_claims(getattr(analysis, "pricing", [])),
-        "opportunities": summarize_claims(
-            getattr(analysis, "opportunities", [])
-        ),
-        "conclusion": summarize_claim(getattr(analysis, "conclusion", None)),
-    }
-
-
-def summarize_claims(claims: list[object]) -> dict[str, object]:
-    """摘要 claim 列表。"""
-
-    items = [
-        summarize_claim(claim)
-        for claim in claims[:STAGE_IO_ITEM_LIMIT]
-    ]
-    return build_limited_collection_summary(items, len(claims))
-
-
-def summarize_claim(claim: object | None) -> dict[str, object] | None:
-    """摘要单条 claim。"""
-
-    if claim is None:
-        return None
-
-    return {
-        "claim": truncate_text(getattr(claim, "claim", "")),
-        "claim_type": getattr(claim, "claim_type", ""),
-        "product_names": list(getattr(claim, "product_names", [])),
-        "evidence_ids": list(getattr(claim, "evidence_ids", [])),
-    }
-
-
-def summarize_verification_result(
-    verification_result: object | None,
-) -> dict[str, object] | None:
-    """摘要 Verifier 输出，保留问题路径和建议动作。"""
-
-    if verification_result is None:
-        return None
-
-    issues = getattr(verification_result, "issues", [])
-    issue_items: list[dict[str, object]] = []
-    for issue in issues[:STAGE_IO_ITEM_LIMIT]:
-        issue_items.append(
-            {
-                "claim_path": getattr(issue, "claim_path", ""),
-                "issue_type": getattr(issue, "issue_type", ""),
-                "message": truncate_text(getattr(issue, "message", "")),
-                "evidence_ids": list(getattr(issue, "evidence_ids", [])),
-                "suggested_action": truncate_text(
-                    getattr(issue, "suggested_action", "")
-                ),
-            }
-        )
-
-    return {
-        "passed": getattr(verification_result, "passed", False),
-        "retry_recommended": getattr(
-            verification_result,
-            "retry_recommended",
-            False,
-        ),
-        "issues": build_limited_collection_summary(
-            issue_items,
-            len(issues),
-        ),
-    }
-
-
-def summarize_research_errors(errors: list[object]) -> dict[str, object]:
-    """摘要 Researcher 的局部失败。"""
-
-    items: list[dict[str, object]] = []
-    for error in errors[:STAGE_IO_ITEM_LIMIT]:
-        items.append(
-            {
-                "product_name": getattr(error, "product_name", ""),
-                "topic": getattr(error, "topic", ""),
-                "query": truncate_text(getattr(error, "query", "")),
-                "message": truncate_text(getattr(error, "message", "")),
-            }
-        )
-
-    return build_limited_collection_summary(items, len(errors))
-
-
-def summarize_text_items(items: list[str]) -> dict[str, object]:
-    """摘要普通字符串列表。"""
-
-    preview_items = [
-        truncate_text(item)
-        for item in items[:STAGE_IO_ITEM_LIMIT]
-    ]
-    return build_limited_collection_summary(preview_items, len(items))
-
-
-def build_limited_collection_summary(
-    items: list[object],
-    total_count: int,
-) -> dict[str, object]:
-    """返回带总数和省略数量的列表摘要。"""
-
-    omitted_count = max(total_count - len(items), 0)
-    return {
-        "count": total_count,
-        "items": items,
-        "omitted_count": omitted_count,
-    }
 
 
 def truncate_text(value: object) -> str:
