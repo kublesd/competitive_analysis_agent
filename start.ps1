@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = $PSScriptRoot
 $applicationPath = Join-Path $projectRoot "competitive_analysis_agent\streamlit_app.py"
-$environmentPath = Join-Path $projectRoot ".env.example"
+$environmentPath = Join-Path $projectRoot ".env"
 $requiredVariables = @(
     "LLM_API_KEY",
     "LLM_BASE_URL",
@@ -93,7 +93,10 @@ function Resolve-ProjectPython {
 
 function Test-ModelConfiguration {
     if (-not (Test-Path -LiteralPath $environmentPath -PathType Leaf)) {
-        throw "Configuration file is missing: $environmentPath"
+        throw (
+            "Configuration file is missing: $environmentPath. " +
+            "Copy .env.example to .env and fill in your local API keys."
+        )
     }
 
     $fileValues = @{}
@@ -121,13 +124,28 @@ function Test-ModelConfiguration {
 
     if ($missingVariables.Count -gt 0) {
         $missingText = $missingVariables -join ", "
-        $helpText = ""
+        $helpMessages = @(
+            " Fill .env with the missing values before starting."
+        )
+        $missingLlmVariables = @(
+            "LLM_API_KEY",
+            "LLM_BASE_URL",
+            "LLM_MODEL"
+        ) | Where-Object { $missingVariables -contains $_ }
+
+        if ($missingLlmVariables.Count -gt 0) {
+            $helpMessages += (
+                " Configure LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL " +
+                "for your OpenAI-compatible model provider."
+            )
+        }
         if ($missingVariables -contains "TAVILY_API_KEY") {
-            $helpText = (
-                " Add TAVILY_API_KEY to .env.example. " +
+            $helpMessages += (
+                " Configure TAVILY_API_KEY for web search. " +
                 "Get a key at https://app.tavily.com."
             )
         }
+        $helpText = $helpMessages -join ""
         throw "Missing application configuration: $missingText.$helpText"
     }
 }

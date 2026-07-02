@@ -239,7 +239,7 @@ def build_model_call_failure_detail(
             "模型服务认证失败，通常是 LLM_API_KEY 无效、过期，"
             "或应用仍在使用旧的环境变量值。"
         )
-        next_step = "请更新 .env.example 中的 LLM_API_KEY 后重新启动应用。"
+        next_step = "请更新 .env 中的 LLM_API_KEY 后重新启动应用。"
     else:
         reason = (
             "模型服务调用失败，可能是网络、超时、额度、模型名称或接口兼容性问题。"

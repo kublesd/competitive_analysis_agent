@@ -9,7 +9,7 @@ from competitive_analysis_agent.config import Settings
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LIVE_ENV_FILE = PROJECT_ROOT / ".env.example"
+LIVE_ENV_FILE = PROJECT_ROOT / ".env"
 LIVE_VARIABLES = (
     "LLM_API_KEY",
     "LLM_BASE_URL",

@@ -559,7 +559,7 @@ def describe_user_error(error: Exception) -> str:
     if error_name in configuration_error_names:
         if isinstance(error, ApplicationSearchConfigurationError):
             return (
-                "搜索配置不完整，请在 .env.example 中设置 "
+                "搜索配置不完整，请在 .env 中设置 "
                 "TAVILY_API_KEY 后重新启动。"
             )
         return "模型配置不完整，请检查项目环境配置后重试。"

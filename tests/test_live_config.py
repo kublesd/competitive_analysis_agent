@@ -14,4 +14,4 @@ def test_live_environment_file_is_relative_to_project_root() -> None:
     expected_root = Path(__file__).resolve().parents[1]
 
     assert PROJECT_ROOT == expected_root
-    assert LIVE_ENV_FILE == expected_root / ".env.example"
+    assert LIVE_ENV_FILE == expected_root / ".env"
