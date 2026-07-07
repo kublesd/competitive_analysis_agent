@@ -9,9 +9,11 @@ from pathlib import Path
 
 APPLICATION_LOGGER_NAME = "competitive_analysis_agent"
 AGENT_EVENT_LOGGER_NAME = "competitive_analysis_agent.agent_events"
+MODEL_IO_LOGGER_NAME = "competitive_analysis_agent.model_io"
 DEFAULT_LOG_DIRECTORY = Path(__file__).resolve().parents[1] / "logs"
 DEFAULT_LOG_FILE_NAME = "application.log"
 DEFAULT_AGENT_EVENT_LOG_FILE_NAME = "agent-events.jsonl"
+DEFAULT_MODEL_IO_LOG_FILE_NAME = "model-io.jsonl"
 DEFAULT_MAX_LOG_BYTES = 5 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 3
 LOG_FORMAT = (
@@ -41,6 +43,7 @@ def configure_application_logging(
     agent_event_log_file_path = get_agent_event_log_path(
         current_log_directory
     )
+    model_io_log_file_path = get_model_io_log_path(current_log_directory)
 
     application_logger = logging.getLogger(APPLICATION_LOGGER_NAME)
     application_logger.setLevel(log_level)
@@ -67,13 +70,18 @@ def configure_application_logging(
         agent_event_log_file_path,
         log_level,
     )
+    _configure_model_io_logger(
+        model_io_log_file_path,
+        log_level,
+    )
 
     if file_handler_added:
         application_logger.info(
             "application_logging_configured log_file=%s "
-            "agent_event_log_file=%s level=%s",
+            "agent_event_log_file=%s model_io_log_file=%s level=%s",
             log_file_path,
             agent_event_log_file_path,
+            model_io_log_file_path,
             logging.getLevelName(log_level),
         )
 
@@ -86,6 +94,15 @@ def get_agent_event_log_path(log_directory: Path | None = None) -> Path:
     current_log_directory = log_directory or DEFAULT_LOG_DIRECTORY
     return (
         current_log_directory / DEFAULT_AGENT_EVENT_LOG_FILE_NAME
+    ).resolve()
+
+
+def get_model_io_log_path(log_directory: Path | None = None) -> Path:
+    """返回完整模型输入输出 JSONL 文件路径。"""
+
+    current_log_directory = log_directory or DEFAULT_LOG_DIRECTORY
+    return (
+        current_log_directory / DEFAULT_MODEL_IO_LOG_FILE_NAME
     ).resolve()
 
 
@@ -135,6 +152,25 @@ def _configure_agent_event_logger(
     )
 
 
+def _configure_model_io_logger(
+    model_io_log_file_path: Path,
+    log_level: int,
+) -> None:
+    """配置专门写 JSONL 的模型输入输出 Logger。"""
+
+    model_io_logger = logging.getLogger(MODEL_IO_LOGGER_NAME)
+    model_io_logger.setLevel(log_level)
+    model_io_logger.propagate = False
+
+    formatter = logging.Formatter(JSONL_LOG_FORMAT)
+    _add_model_io_handler_if_missing(
+        model_io_logger,
+        model_io_log_file_path,
+        formatter,
+        log_level,
+    )
+
+
 def _add_agent_event_handler_if_missing(
     logger: logging.Logger,
     log_file_path: Path,
@@ -159,6 +195,32 @@ def _add_agent_event_handler_if_missing(
     event_handler.setFormatter(formatter)
     event_handler._agent_event_log_path = normalized_path
     logger.addHandler(event_handler)
+
+
+def _add_model_io_handler_if_missing(
+    logger: logging.Logger,
+    log_file_path: Path,
+    formatter: logging.Formatter,
+    log_level: int,
+) -> None:
+    """按绝对路径识别已有模型 I/O Handler，避免重复写日志。"""
+
+    normalized_path = str(log_file_path)
+    for handler in logger.handlers:
+        if getattr(handler, "_model_io_log_path", None) == normalized_path:
+            handler.setLevel(log_level)
+            return
+
+    model_io_handler = RotatingFileHandler(
+        log_file_path,
+        maxBytes=DEFAULT_MAX_LOG_BYTES,
+        backupCount=DEFAULT_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    model_io_handler.setLevel(log_level)
+    model_io_handler.setFormatter(formatter)
+    model_io_handler._model_io_log_path = normalized_path
+    logger.addHandler(model_io_handler)
 
 
 def _add_console_handler_if_missing(

@@ -13,6 +13,11 @@ from competitive_analysis_agent.analyst import (
     AnalysisClaim,
     CompetitiveAnalysis,
 )
+from competitive_analysis_agent.model_io import (
+    log_model_error,
+    log_model_request,
+    log_model_response,
+)
 from competitive_analysis_agent.pricing_utils import (
     billing_cycle_is_supported_by_text,
     is_free_price_text,
@@ -243,7 +248,14 @@ class LangChainVerifierModel:
     def invoke(self, messages: list[dict[str, str]]) -> object:
         """执行模型调用，并在解析失败时返回原始文本供统一校验。"""
 
-        structured_response = self._structured_model.invoke(messages)
+        call_id = log_model_request("Verifier", messages)
+        try:
+            structured_response = self._structured_model.invoke(messages)
+        except Exception as error:
+            log_model_error("Verifier", call_id, error)
+            raise
+        log_model_response("Verifier", call_id, structured_response)
+
         if not isinstance(structured_response, dict):
             return structured_response
 

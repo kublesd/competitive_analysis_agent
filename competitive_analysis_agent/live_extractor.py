@@ -13,6 +13,7 @@ from competitive_analysis_agent.extractor import (
 )
 from competitive_analysis_agent.live_config import (
     LIVE_MODEL_MAX_RETRIES,
+    build_provider_request_options,
     load_live_settings,
 )
 from competitive_analysis_agent.schemas import Evidence
@@ -53,9 +54,9 @@ def create_live_extractor(settings: Settings) -> Extractor:
         model=settings.llm_model,
         temperature=0,
         max_tokens=900,
-        extra_body={"enable_thinking": False},
         timeout=45,
         max_retries=LIVE_MODEL_MAX_RETRIES,
+        **build_provider_request_options(settings),
     )
     return Extractor(LangChainExtractorModel(chat_model))
 

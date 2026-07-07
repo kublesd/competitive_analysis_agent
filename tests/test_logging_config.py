@@ -7,8 +7,10 @@ from pathlib import Path
 from competitive_analysis_agent.logging_config import (
     AGENT_EVENT_LOGGER_NAME,
     APPLICATION_LOGGER_NAME,
+    MODEL_IO_LOGGER_NAME,
     configure_application_logging,
     get_agent_event_log_path,
+    get_model_io_log_path,
 )
 
 
@@ -24,6 +26,10 @@ class LoggingConfigTest(unittest.TestCase):
         for handler in list(event_logger.handlers):
             handler.close()
             event_logger.removeHandler(handler)
+        model_io_logger = logging.getLogger(MODEL_IO_LOGGER_NAME)
+        for handler in list(model_io_logger.handlers):
+            handler.close()
+            model_io_logger.removeHandler(handler)
 
     def test_configure_writes_log_file_without_duplicate_handlers(self) -> None:
         # Streamlit 会重复执行脚本，同一路径只能绑定一个文件 Handler。
@@ -90,6 +96,40 @@ class LoggingConfigTest(unittest.TestCase):
         self.assertEqual(
             json.loads(log_lines[-1]),
             {"schema_version": 1, "event_type": "test"},
+        )
+
+    def test_configure_writes_model_io_jsonl_without_duplicates(self) -> None:
+        # 模型输入输出使用独立 JSONL 文件，不混入脱敏阶段事件。
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        log_directory = Path(temporary_directory.name)
+
+        configure_application_logging(
+            log_directory,
+            include_console=False,
+        )
+        configure_application_logging(
+            log_directory,
+            include_console=False,
+        )
+        model_io_logger = logging.getLogger(MODEL_IO_LOGGER_NAME)
+        model_io_logger.info('{"schema_version":1,"event_type":"model_test"}')
+
+        model_io_handlers = [
+            handler
+            for handler in model_io_logger.handlers
+            if getattr(handler, "_model_io_log_path", None)
+        ]
+        self.assertEqual(len(model_io_handlers), 1)
+
+        model_io_log_path = get_model_io_log_path(log_directory)
+        self.assertTrue(model_io_log_path.is_file())
+        log_lines = model_io_log_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        self.assertEqual(
+            json.loads(log_lines[-1]),
+            {"schema_version": 1, "event_type": "model_test"},
         )
 
     def test_log_configuration_does_not_record_secret_values(self) -> None:

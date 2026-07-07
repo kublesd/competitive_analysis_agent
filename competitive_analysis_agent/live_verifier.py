@@ -12,6 +12,7 @@ from competitive_analysis_agent.analyst import (
 from competitive_analysis_agent.config import Settings
 from competitive_analysis_agent.live_config import (
     LIVE_MODEL_MAX_RETRIES,
+    build_provider_request_options,
     load_live_settings,
 )
 from competitive_analysis_agent.schemas import Evidence
@@ -57,9 +58,9 @@ def create_live_verifier(settings: Settings) -> Verifier:
         model=settings.llm_model,
         temperature=0,
         max_tokens=700,
-        extra_body={"enable_thinking": False},
         timeout=60,
         max_retries=LIVE_MODEL_MAX_RETRIES,
+        **build_provider_request_options(settings),
     )
     return Verifier(LangChainVerifierModel(chat_model))
 

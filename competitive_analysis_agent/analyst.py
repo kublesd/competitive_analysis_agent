@@ -9,6 +9,11 @@ from typing import Literal, Protocol
 
 from pydantic import Field, ValidationError, model_validator
 
+from competitive_analysis_agent.model_io import (
+    log_model_error,
+    log_model_request,
+    log_model_response,
+)
 from competitive_analysis_agent.pricing_utils import should_include_billing_cycle
 from competitive_analysis_agent.schemas import (
     ContractModel,
@@ -274,7 +279,14 @@ class LangChainAnalystModel:
     def invoke(self, messages: list[dict[str, str]]) -> object:
         """执行模型调用，并在解析失败时保留原始文本供修复。"""
 
-        structured_response = self._structured_model.invoke(messages)
+        call_id = log_model_request("Analyst", messages)
+        try:
+            structured_response = self._structured_model.invoke(messages)
+        except Exception as error:
+            log_model_error("Analyst", call_id, error)
+            raise
+        log_model_response("Analyst", call_id, structured_response)
+
         if not isinstance(structured_response, dict):
             return structured_response
 

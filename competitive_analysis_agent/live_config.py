@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from os import environ
 from pathlib import Path
+from urllib.parse import urlparse
 
 from competitive_analysis_agent.config import Settings
 
@@ -50,3 +51,35 @@ def load_live_settings(env_file: Path = LIVE_ENV_FILE) -> Settings:
         environ.setdefault(variable_name, variable_value)
 
     return Settings.from_env()
+
+
+def build_provider_request_options(settings: Settings) -> dict[str, object]:
+    """返回 OpenAI 兼容模型的供应商专用请求选项。"""
+
+    request_options: dict[str, object] = {}
+    if should_disable_gemini_flash_thinking(settings):
+        request_options["reasoning_effort"] = "none"
+
+    return request_options
+
+
+def should_disable_gemini_flash_thinking(settings: Settings) -> bool:
+    """判断当前配置是否应按 Gemini 2.5 Flash 方式关闭 thinking。"""
+
+    base_url = settings.llm_base_url or ""
+    model_name = (settings.llm_model or "").lower()
+    hostname = urlparse(base_url).hostname or ""
+
+    is_gemini_openai_endpoint = hostname.endswith(
+        "generativelanguage.googleapis.com"
+    )
+    is_gemini_25_model = model_name.startswith("gemini-2.5")
+    is_pro_model = "pro" in model_name
+
+    # Google 文档要求 Gemini 2.5 Flash/Lite 使用 reasoning_effort="none"
+    # 关闭思考；2.5 Pro 和 Gemini 3 不能关闭，因此不注入该参数。
+    return (
+        is_gemini_openai_endpoint
+        and is_gemini_25_model
+        and not is_pro_model
+    )

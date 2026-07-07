@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 
 from competitive_analysis_agent.config import Settings
-from competitive_analysis_agent.live_config import LIVE_MODEL_MAX_RETRIES
+from competitive_analysis_agent.live_config import (
+    LIVE_MODEL_MAX_RETRIES,
+    build_provider_request_options,
+)
 from competitive_analysis_agent.planner import (
     LangChainPlannerModel,
     Planner,
@@ -48,10 +51,10 @@ def create_live_planner(settings: Settings) -> Planner:
         model=settings.llm_model,
         temperature=0,
         max_tokens=512,
-        extra_body={"enable_thinking": False},
         timeout=45,
         # UI 路径允许一次供应商级重试，降低临时网络断开对整次分析的影响。
         max_retries=LIVE_MODEL_MAX_RETRIES,
+        **build_provider_request_options(settings),
     )
     return Planner(LangChainPlannerModel(chat_model))
 

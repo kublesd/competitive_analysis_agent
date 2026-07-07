@@ -119,3 +119,41 @@ Prompt、模型原始响应、token usage 或跨机器分布式 trace。
 
 后续若要增强生产可观测性，优先扩展新的 Hook 后端，而不是改业务节点：例如模型调用 Hook、搜索调用
 Hook、token usage 统计、OpenTelemetry adapter 或一个只读日志查看页面。
+
+## 9. 2026-07-02 完整模型 I/O 后台日志
+
+用户需要在后台排查 Planner、Extractor、Analyst 和 Verifier 的真实模型输入输出。原有
+`agent-events.jsonl` 只保存脱敏摘要，不能还原模型看到的 Prompt 和返回内容，因此本次新增独立的
+`logs/model-io.jsonl`。
+
+实现结果：
+
+- `logging_config.py` 新增 `MODEL_IO_LOGGER_NAME`、`get_model_io_log_path()` 和独立轮转
+  JSONL handler。
+- 新增 `competitive_analysis_agent/model_io.py`：
+  - `model_io_context()` 在 LangGraph 节点运行期间保存 `analysis_id`、`entrypoint`、
+    `stage`、`attempt_index` 和 `retry_count`；
+  - `log_model_request()` 记录完整 messages、消息数量和输入字符数；
+  - `log_model_response()` 记录结构化响应、`raw.content` 或 Pydantic 输出；
+  - `log_model_error()` 只记录异常类型，不保存供应商错误原文。
+- `workflow.py` 在 observed node wrapper 中注入模型日志上下文。
+- `LangChainPlannerModel`、`LangChainExtractorModel`、`LangChainAnalystModel`、
+  `LangChainVerifierModel` 在真实模型边界写 request/response/error 事件。
+
+重要取舍：
+
+- `agent-events.jsonl` 继续保持脱敏摘要，用于默认运行轨迹。
+- `model-io.jsonl` 会保存完整 Prompt、Evidence 文本片段和模型响应，便于本地排障；它不保存
+  API Key，因为密钥不在 messages 或模型响应中，但日志本身仍应视为运行数据，不应提交到 Git。
+- 错误事件不记录供应商异常原文，避免把远端错误消息、请求详情或潜在敏感文本写入日志。
+
+验证记录：
+
+- 聚焦测试：
+  `C:\Users\zoujunkai\miniconda3\python.exe -m pytest tests\test_logging_config.py tests\test_model_io.py tests\test_planner.py tests\test_extractor.py tests\test_analyst.py tests\test_verifier.py`
+  结果 `82 passed`。
+- 完整离线测试：
+  `C:\Users\zoujunkai\miniconda3\python.exe -m pytest`
+  结果 `169 passed, 7 deselected`。
+- 真实 LLM 未在本次强制触发；当前用户环境刚出现过硅基流动 Planner `APITimeoutError`，本次改动通过
+  fake structured model 覆盖日志行为，避免为了验证日志再次消耗外部模型请求。

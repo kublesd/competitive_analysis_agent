@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from competitive_analysis_agent.agent_hooks import HookManager
+from competitive_analysis_agent.model_io import model_io_context
 from competitive_analysis_agent.analyst import (
     Analyst,
     AnalystInput,
@@ -593,7 +594,14 @@ def build_observed_node(
         hook_manager.on_stage_started(stage_context, input_summary)
 
         try:
-            update = node_runner(state)
+            with model_io_context(
+                analysis_id=hook_manager.run_context.analysis_id,
+                entrypoint=hook_manager.run_context.entrypoint,
+                stage=stage_name,
+                attempt_index=stage_context.attempt_index,
+                retry_count=stage_context.retry_count,
+            ):
+                update = node_runner(state)
         except Exception as error:
             error_summary = build_safe_error_summary(
                 summarizer=summarizer,

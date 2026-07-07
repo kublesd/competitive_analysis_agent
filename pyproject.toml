@@ -25,6 +25,10 @@ competitive-analysis-api = "competitive_analysis_agent.api_app:main"
 competitive-analysis-health = "competitive_analysis_agent.health:main"
 competitive-analysis-eval = "competitive_analysis_agent.evaluation:main"
 
+[tool.setuptools]
+# 只把项目源码包交给 setuptools，避免 logs/、evaluation/ 等运行目录被误判为包。
+packages = ["competitive_analysis_agent"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = '-m "not live_llm and not live_search"'
