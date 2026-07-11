@@ -54,7 +54,7 @@ from competitive_analysis_agent.workflow import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIRECTORY = PROJECT_ROOT / "tests" / "fixtures"
 DEFAULT_CASES_PATH = PROJECT_ROOT / "evaluation" / "cases.json"
-DEFAULT_OUTPUT_DIRECTORY = PROJECT_ROOT / "docs" / "evaluation"
+DEFAULT_OUTPUT_DIRECTORY = PROJECT_ROOT / "evaluation" / "reports"
 FIXED_EVALUATION_TIME = datetime(
     2026,
     6,

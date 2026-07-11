@@ -37,6 +37,14 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python -m pytest
 ```
 
+## 评估
+
+评估集、结果和说明统一放在 `evaluation/`：用例在 `cases.json`，结果在 `reports/`。
+
+```powershell
+.\.venv\Scripts\python -m competitive_analysis_agent.evaluation
+```
+
 ## 架构
 
 ```mermaid
