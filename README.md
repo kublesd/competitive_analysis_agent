@@ -19,6 +19,24 @@
 
 Python、LangGraph、LangChain、Pydantic、Tavily、Streamlit、FastAPI、pytest。
 
+## 快速开始
+
+需要 Python 3.10–3.13，以及 LLM 和 Tavily 的 API Key。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[dev,llm]"
+Copy-Item .env.example .env
+# 在 .env 中填写 LLM_API_KEY、LLM_BASE_URL、LLM_MODEL 和 TAVILY_API_KEY
+.\start.ps1
+```
+
+默认测试使用离线 fixtures，不会调用真实服务：
+
+```powershell
+.\.venv\Scripts\python -m pytest
+```
+
 ## 架构
 
 ```mermaid
