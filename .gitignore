@@ -17,6 +17,7 @@ Thumbs.db
 data/tasks/
 data/reports/
 logs/
+.deepeval/
 evaluation/
 docs/
 docs/
