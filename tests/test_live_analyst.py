@@ -10,6 +10,7 @@ from competitive_analysis_agent.analyst import (
     contains_pricing_language,
 )
 from competitive_analysis_agent.live_analyst import (
+    build_live_market_definition,
     build_live_sample_profiles,
     create_live_analyst,
 )
@@ -23,13 +24,20 @@ def test_analyst_with_real_llm_returns_grounded_comparison() -> None:
     profiles = build_live_sample_profiles()
     analyst = create_live_analyst(load_live_settings())
 
-    analysis = analyst.analyze(AnalystInput(profiles=profiles))
+    market_definition = build_live_market_definition()
+    analysis = analyst.analyze(
+        AnalystInput(
+            profiles=profiles,
+            market_definition=market_definition,
+        )
+    )
 
     assert analysis.products == ["Atlas Notes", "Beacon Docs"]
     assert analysis.positioning
     assert analysis.features
     assert analysis.pricing
     assert analysis.opportunities
+    assert analysis.recommendations
 
     claims = collect_analysis_claims(analysis)
     factual_claims = [
@@ -55,3 +63,15 @@ def test_analyst_with_real_llm_returns_grounded_comparison() -> None:
         "Atlas Notes",
         "Beacon Docs",
     }
+    assert all(
+        recommendation.target_scenario
+        and recommendation.tradeoff_or_gap
+        and recommendation.recommended_action
+        and recommendation.evidence_ids
+        and recommendation.limitations
+        for recommendation in analysis.recommendations
+    )
+    assert all(
+        set(recommendation.product_names).issubset(set(analysis.products))
+        for recommendation in analysis.recommendations
+    )

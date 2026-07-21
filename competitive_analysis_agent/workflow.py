@@ -22,6 +22,8 @@ from competitive_analysis_agent.extractor import (
     ExtractorInput,
     build_pricing_duplicate_key,
     classify_pricing_source_scope,
+    collect_item_evidence_ids,
+    format_pricing_fact,
     normalize_scope_text,
     remove_plan_level_positioning,
 )
@@ -33,7 +35,9 @@ from competitive_analysis_agent.researcher import (
     ResearcherInput,
 )
 from competitive_analysis_agent.schemas import (
+    DimensionFinding,
     Evidence,
+    MarketDefinition,
     ProductProfile,
     PricingPlan,
     ResearchTask,
@@ -56,11 +60,14 @@ class WorkflowGraphState(TypedDict):
 
     target_product: str
     competitors: list[str]
+    market_definition: MarketDefinition
     dimensions: list[str]
     official_domains_by_product: dict[str, list[str]]
     max_results_per_task: int
     research_tasks: list[ResearchTask]
     evidence: list[Evidence]
+    excluded_evidence: list[Evidence]
+    uncertain_evidence: list[Evidence]
     research_errors: list[ResearchError]
     product_profiles: list[ProductProfile]
     analysis_result: CompetitiveAnalysis | None
@@ -88,6 +95,7 @@ class WorkflowComponents:
 
 def create_initial_state(
     planner_input: PlannerInput,
+    market_definition: MarketDefinition,
     official_domains_by_product: dict[str, list[str]] | None = None,
     max_results_per_task: int = 3,
 ) -> WorkflowGraphState:
@@ -96,11 +104,14 @@ def create_initial_state(
     return WorkflowGraphState(
         target_product=planner_input.target_product,
         competitors=list(planner_input.competitors),
-        dimensions=list(planner_input.dimensions),
+        market_definition=market_definition,
+        dimensions=list(market_definition.core_dimensions),
         official_domains_by_product=official_domains_by_product or {},
         max_results_per_task=max_results_per_task,
         research_tasks=[],
         evidence=[],
+        excluded_evidence=[],
+        uncertain_evidence=[],
         research_errors=[],
         product_profiles=[],
         analysis_result=None,
@@ -121,7 +132,7 @@ def run_planner_node(
     planner_input = PlannerInput(
         target_product=state["target_product"],
         competitors=state["competitors"],
-        dimensions=state["dimensions"],
+        market_definition=state["market_definition"],
     )
     research_tasks = planner.plan(planner_input)
     return {
@@ -138,6 +149,7 @@ def run_researcher_node(
 
     researcher_input = ResearcherInput(
         tasks=state["research_tasks"],
+        market_definition=state["market_definition"],
         official_domains_by_product=state[
             "official_domains_by_product"
         ],
@@ -146,6 +158,8 @@ def run_researcher_node(
     research_result = researcher.research(researcher_input)
     return {
         "evidence": research_result.evidence,
+        "excluded_evidence": research_result.excluded_evidence,
+        "uncertain_evidence": research_result.uncertain_evidence,
         "research_errors": research_result.errors,
         "stage_history": [*state["stage_history"], "researcher"],
     }
@@ -157,11 +171,15 @@ def run_extractor_node(
 ) -> dict[str, object]:
     """调用 Extractor，把 Evidence 转换成产品画像。"""
 
-    extractor_input = ExtractorInput(evidence=state["evidence"])
+    extractor_input = ExtractorInput(
+        evidence=state["evidence"],
+        market_definition=state["market_definition"],
+    )
     extracted_profiles = extractor.extract(extractor_input)
     product_profiles, validation_errors = validate_product_profiles_for_analysis(
         product_profiles=extracted_profiles,
         evidence=state["evidence"],
+        market_definition=state["market_definition"],
     )
     return {
         "product_profiles": product_profiles,
@@ -173,6 +191,7 @@ def run_extractor_node(
 def validate_product_profiles_for_analysis(
     product_profiles: list[ProductProfile],
     evidence: list[Evidence],
+    market_definition: MarketDefinition,
 ) -> tuple[list[ProductProfile], list[ResearchError]]:
     """在 Analyst 前清理画像污染，并把删除原因记录为数据限制。"""
 
@@ -202,14 +221,21 @@ def validate_product_profiles_for_analysis(
                 )
             )
 
+        # Evidence 的语义支持关系交给后续 Verifier 模型判断；这里仅处理
+        # 产品范围、明显冲突和可确定的字段同步，避免正则误删可用资料。
         scoped_profile, scope_errors = remove_out_of_scope_pricing(
             profile=positioned_profile,
             evidence_by_id=evidence_by_id,
+            market_definition=market_definition,
         )
         conflict_checked_profile, conflict_errors = (
             remove_conflicting_profile_pricing(scoped_profile)
         )
-        validated_profiles.append(conflict_checked_profile)
+        synchronized_profile = synchronize_pricing_dimension_finding(
+            profile=conflict_checked_profile,
+            market_definition=market_definition,
+        )
+        validated_profiles.append(synchronized_profile)
         validation_errors.extend(scope_errors)
         validation_errors.extend(conflict_errors)
 
@@ -233,11 +259,22 @@ def group_evidence_by_product(
 def remove_out_of_scope_pricing(
     profile: ProductProfile,
     evidence_by_id: dict[str, Evidence],
+    market_definition: MarketDefinition,
 ) -> tuple[ProductProfile, list[ResearchError]]:
-    """删除默认 API pricing 范围外的价格项，并生成可展示的数据限制。"""
+    """按显式价格范围删除其他计价类型，并生成可展示的数据限制。"""
 
     kept_pricing: list[PricingPlan] = []
     validation_errors: list[ResearchError] = []
+    expected_classification = (
+        "api_pricing"
+        if market_definition.pricing_scope == "api"
+        else "non_api_pricing"
+    )
+    pricing_topic = (
+        "api_pricing"
+        if market_definition.pricing_scope == "api"
+        else "pricing"
+    )
 
     for pricing_plan in profile.pricing:
         scope_classification = classify_pricing_source_scope(
@@ -245,16 +282,17 @@ def remove_out_of_scope_pricing(
             pricing_plan=pricing_plan,
             evidence_by_id=evidence_by_id,
         )
-        if scope_classification in {"non_api_pricing", "ambiguous"}:
+        if scope_classification != expected_classification:
             validation_errors.append(
                 build_profile_validation_error(
                     product_name=profile.product_name,
-                    topic="pricing",
+                    topic=pricing_topic,
                     message=(
                         f"{profile.product_name} pricing plan "
                         f"{pricing_plan.plan_name!r} was removed because "
                         f"it was classified as {scope_classification} for "
-                        "the requested default API pricing scope."
+                        f"the requested {market_definition.pricing_scope} "
+                        "pricing scope."
                     ),
                 )
             )
@@ -268,19 +306,64 @@ def remove_out_of_scope_pricing(
     return profile.model_copy(update={"pricing": kept_pricing}), validation_errors
 
 
+def synchronize_pricing_dimension_finding(
+    profile: ProductProfile,
+    market_definition: MarketDefinition,
+) -> ProductProfile:
+    """用过滤后的价格列表重建价格 Finding，清除已删除套餐的事实和引用。"""
+
+    pricing_dimension = (
+        "api_pricing"
+        if market_definition.pricing_scope == "api"
+        else "pricing"
+    )
+    selected_dimension = next(
+        (
+            dimension
+            for dimension in market_definition.core_dimensions
+            if dimension.casefold() == pricing_dimension
+        ),
+        None,
+    )
+    if selected_dimension is None:
+        return profile
+
+    replacement = DimensionFinding(
+        dimension=selected_dimension,
+        facts=[format_pricing_fact(plan) for plan in profile.pricing],
+        evidence_ids=collect_item_evidence_ids(profile.pricing),
+    )
+    synchronized_findings: list[DimensionFinding] = []
+    replaced = False
+    for finding in profile.dimension_findings:
+        if finding.dimension.casefold() == selected_dimension.casefold():
+            synchronized_findings.append(replacement)
+            replaced = True
+            continue
+        synchronized_findings.append(finding)
+
+    if not replaced:
+        synchronized_findings.append(replacement)
+    return profile.model_copy(
+        update={"dimension_findings": synchronized_findings}
+    )
+
+
 def remove_conflicting_profile_pricing(
     profile: ProductProfile,
 ) -> tuple[ProductProfile, list[ResearchError]]:
     """删除同名套餐同一计费周期下价格互相冲突的价格项。"""
 
-    pricing_groups: dict[tuple[str, str], list[PricingPlan]] = {}
+    pricing_groups: dict[
+        tuple[str, str, str, str, str], list[PricingPlan]
+    ] = {}
     for pricing_plan in profile.pricing:
         duplicate_key = build_pricing_duplicate_key(pricing_plan)
         if duplicate_key not in pricing_groups:
             pricing_groups[duplicate_key] = []
         pricing_groups[duplicate_key].append(pricing_plan)
 
-    conflicting_keys: set[tuple[str, str]] = set()
+    conflicting_keys: set[tuple[str, str, str, str, str]] = set()
     for duplicate_key, pricing_plans in pricing_groups.items():
         normalized_prices = {
             normalize_scope_text(pricing_plan.price or "")
@@ -343,6 +426,7 @@ def run_analyst_node(
     )
     analyst_input = AnalystInput(
         profiles=state["product_profiles"],
+        market_definition=state["market_definition"],
         revision_feedback=revision_feedback,
     )
     analysis_result = analyst.analyze(analyst_input)
@@ -366,6 +450,8 @@ def run_verifier_node(
     verifier_input = VerifierInput(
         analysis=analysis_result,
         evidence=state["evidence"],
+        market_definition=state["market_definition"],
+        product_profiles=state["product_profiles"],
     )
     verification_result = verifier.verify(verifier_input)
 
@@ -408,8 +494,13 @@ def run_reporter_node(
 
     reporter_input = ReporterInput(
         analysis=analysis_result,
+        market_definition=state["market_definition"],
         product_profiles=state["product_profiles"],
-        evidence=state["evidence"],
+        evidence=[
+            *state["evidence"],
+            *state["excluded_evidence"],
+            *state["uncertain_evidence"],
+        ],
         verification_result=verification_result,
         research_errors=state["research_errors"],
     )
@@ -465,8 +556,9 @@ def build_revision_guidance(claim_path: str, issue_type: str) -> str:
 
     if claim_path.startswith("pricing["):
         return (
-            "For pricing, map the claim back to ProductProfile.pricing; "
-            "unknown prices must remain `without a public price`."
+            "For pricing, map the claim back to ProductProfile.models[].pricing "
+            "or the legacy ProductProfile.pricing entry; keep model name, price "
+            "direction, amount and unit, and leave unknown prices missing."
         )
 
     if issue_type == "unsupported_claim":

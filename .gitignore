@@ -18,6 +18,9 @@ data/tasks/
 data/reports/
 logs/
 .deepeval/
-evaluation/
+evaluation/*
+!evaluation/README.md
+!evaluation/cases.json
 docs/
 docs/
+报告/

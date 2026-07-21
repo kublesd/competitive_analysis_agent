@@ -4,22 +4,22 @@
       {
         "product_name": "Atlas Notes",
         "topic": "features",
-        "query": "Atlas Notes official features"
+        "query": "Atlas Notes SaaS 协作软件 企业订阅产品 features official exclude 消费端套餐 exclude API 用量价格"
       },
       {
         "product_name": "Atlas Notes",
         "topic": "pricing",
-        "query": "Atlas Notes official pricing"
+        "query": "Atlas Notes SaaS 协作软件 企业订阅产品 pricing official exclude 消费端套餐 exclude API 用量价格"
       },
       {
         "product_name": "Beacon Docs",
         "topic": "features",
-        "query": "Beacon Docs official features"
+        "query": "Beacon Docs SaaS 协作软件 企业订阅产品 features official exclude 消费端套餐 exclude API 用量价格"
       },
       {
         "product_name": "Beacon Docs",
         "topic": "pricing",
-        "query": "Beacon Docs official pricing"
+        "query": "Beacon Docs SaaS 协作软件 企业订阅产品 pricing official exclude 消费端套餐 exclude API 用量价格"
       }
     ]
   },
@@ -28,17 +28,41 @@
       {
         "product_name": "Atlas Notes",
         "topic": "features",
-        "query": "Atlas Notes official features"
+        "query": "Atlas Notes SaaS 协作软件 企业订阅产品 features official exclude 消费端套餐 exclude API 用量价格"
       },
       {
         "product_name": "Atlas Notes",
         "topic": "pricing",
-        "query": "Atlas Notes official pricing"
+        "query": "Atlas Notes SaaS 协作软件 企业订阅产品 pricing official exclude 消费端套餐 exclude API 用量价格"
       },
       {
         "product_name": "Beacon Docs",
         "topic": "features",
-        "query": "Beacon Docs official features"
+        "query": "Beacon Docs SaaS 协作软件 企业订阅产品 features official exclude 消费端套餐 exclude API 用量价格"
+      }
+    ]
+  },
+  "missing_query_scope": {
+    "tasks": [
+      {
+        "product_name": "Atlas Notes",
+        "topic": "features",
+        "query": "Atlas Notes SaaS 协作软件 features official exclude 消费端套餐 exclude API 用量价格"
+      },
+      {
+        "product_name": "Atlas Notes",
+        "topic": "pricing",
+        "query": "Atlas Notes SaaS 协作软件 企业订阅产品 pricing official exclude 消费端套餐 exclude API 用量价格"
+      },
+      {
+        "product_name": "Beacon Docs",
+        "topic": "features",
+        "query": "Beacon Docs SaaS 协作软件 企业订阅产品 features official exclude 消费端套餐 exclude API 用量价格"
+      },
+      {
+        "product_name": "Beacon Docs",
+        "topic": "pricing",
+        "query": "Beacon Docs SaaS 协作软件 企业订阅产品 pricing official exclude 消费端套餐 exclude API 用量价格"
       }
     ]
   },

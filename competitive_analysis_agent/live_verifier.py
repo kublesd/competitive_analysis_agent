@@ -15,7 +15,12 @@ from competitive_analysis_agent.live_config import (
     build_provider_request_options,
     load_live_settings,
 )
-from competitive_analysis_agent.schemas import Evidence
+from competitive_analysis_agent.schemas import (
+    Evidence,
+    MarketDefinition,
+    PricingPlan,
+    ProductProfile,
+)
 from competitive_analysis_agent.verifier import (
     LangChainVerifierModel,
     Verifier,
@@ -108,7 +113,58 @@ def build_live_verifier_input() -> VerifierInput:
             evidence_ids=["E1", "E2"],
         ),
     )
-    return VerifierInput(analysis=analysis, evidence=evidence)
+    market_definition = MarketDefinition(
+        market_name="Team knowledge workspace",
+        product_category="SaaS collaboration software",
+        target_buyer="Mid-sized company IT and business leaders",
+        comparison_level="Team subscription product",
+        core_dimensions=["pricing"],
+        exclusions=["consumer plans", "API usage pricing"],
+    )
+    product_profiles = [
+        ProductProfile(
+            product_name="Atlas Notes",
+            dimension_findings=[
+                {
+                    "dimension": "pricing",
+                    "facts": ["Team | 12 USD per user | monthly"],
+                    "evidence_ids": ["E1"],
+                }
+            ],
+            pricing=[
+                PricingPlan(
+                    plan_name="Team",
+                    price="12 USD per user",
+                    unit="user",
+                    billing_cycle="monthly",
+                    evidence_ids=["E1"],
+                )
+            ],
+        ),
+        ProductProfile(
+            product_name="Beacon Docs",
+            dimension_findings=[
+                {
+                    "dimension": "pricing",
+                    "facts": ["Business plan has no public price"],
+                    "evidence_ids": ["E2"],
+                }
+            ],
+            pricing=[
+                PricingPlan(
+                    plan_name="Business",
+                    price=None,
+                    evidence_ids=["E2"],
+                )
+            ],
+        ),
+    ]
+    return VerifierInput(
+        analysis=analysis,
+        evidence=evidence,
+        market_definition=market_definition,
+        product_profiles=product_profiles,
+    )
 
 
 def run_smoke_test(

@@ -7,9 +7,10 @@ import logging
 import re
 from time import perf_counter
 from traceback import extract_tb
+from typing import Literal
 from uuid import uuid4
 
-from pydantic import Field, model_validator
+from pydantic import Field, computed_field, model_validator
 
 from competitive_analysis_agent.agent_hooks import (
     AgentHook,
@@ -30,6 +31,7 @@ from competitive_analysis_agent.researcher import ResearchError
 from competitive_analysis_agent.schemas import (
     ContractModel,
     Evidence,
+    MarketDefinition,
     RequiredText,
 )
 from competitive_analysis_agent.verifier import VerificationResult
@@ -41,26 +43,31 @@ from competitive_analysis_agent.workflow import (
 )
 
 
-DEFAULT_TARGET_PRODUCT = "ChatGPT"
-DEFAULT_COMPETITORS = ["Claude, Gemini"]
+DEFAULT_TARGET_PRODUCT = "OpenAI API"
+DEFAULT_COMPETITORS = ["Claude API", "Gemini API"]
+DEFAULT_MARKET_NAME = "生成式 AI API"
+DEFAULT_PRODUCT_CATEGORY = "大语言模型 API"
+DEFAULT_TARGET_BUYER = "开发团队、AI 产品负责人、企业技术团队"
+DEFAULT_COMPARISON_LEVEL = "模型 API 服务"
+DEFAULT_PRICING_SCOPE: Literal["api", "subscription"] = "api"
 AVAILABLE_DIMENSIONS = [
-    "features",
-    "pricing",
-    "positioning",
-    "target_users",
-    "limitations",
+    "model_capabilities",
+    "api_pricing",
+    "developer_platform",
+    "usage_limits",
 ]
 DEFAULT_DIMENSIONS = [
-    "features",
-    "pricing",
-    "positioning",
-    "target_users",
+    "model_capabilities",
+    "api_pricing",
+    "developer_platform",
+    "usage_limits",
 ]
+DEFAULT_EXCLUSIONS_TEXT = "消费端订阅套餐\n按席位企业套餐"
 DEFAULT_OFFICIAL_DOMAINS_TEXT = "\n".join(
     [
-        "ChatGPT=openai.com,chatgpt.com",
-        "Claude=anthropic.com",
-        "Gemini=one.google.com,workspace.google.com,ai.google.dev,gemini.google.com",
+        "OpenAI API=openai.com,platform.openai.com",
+        "Claude API=anthropic.com,docs.anthropic.com",
+        "Gemini API=ai.google.dev,cloud.google.com",
     ]
 )
 
@@ -92,11 +99,11 @@ class AnalysisRunError(RuntimeError):
 
 
 class AnalysisRequest(ContractModel):
-    """保存 UI 提交的目标产品、竞品和分析维度。"""
+    """保存 UI 与 API 共用的产品和市场范围请求。"""
 
     target_product: RequiredText
     competitors: list[RequiredText] = Field(min_length=1)
-    dimensions: list[RequiredText] = Field(min_length=1)
+    market_definition: MarketDefinition
     official_domains_by_product: dict[str, list[RequiredText]] = Field(
         default_factory=dict
     )
@@ -108,9 +115,6 @@ class AnalysisRequest(ContractModel):
         products = [self.target_product, *self.competitors]
         if len(products) != len(set(products)):
             raise ValueError("Target product and competitors must be unique.")
-
-        if len(self.dimensions) != len(set(self.dimensions)):
-            raise ValueError("Dimensions must be unique.")
 
         known_products = set(products)
         unknown_domain_products = (
@@ -125,15 +129,52 @@ class AnalysisRequest(ContractModel):
 
         return self
 
+    @property
+    def dimensions(self) -> list[str]:
+        """兼容现有工作流，维度以市场定义为唯一来源。"""
+
+        return self.market_definition.core_dimensions
+
+
+class EvidenceScopeCounts(ContractModel):
+    """保存范围内、已排除和待核验 Evidence 数量。"""
+
+    in_scope: int = Field(ge=0)
+    out_of_scope: int = Field(ge=0)
+    uncertain: int = Field(ge=0)
+
 
 class AnalysisRunResult(ContractModel):
     """保存页面需要展示和下载的工作流终态。"""
 
     final_report: RequiredText
+    market_definition: MarketDefinition
     stage_history: list[RequiredText] = Field(min_length=1)
     evidence: list[Evidence] = Field(min_length=1)
     verification_result: VerificationResult
     research_errors: list[ResearchError] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def evidence_scope_counts(self) -> EvidenceScopeCounts:
+        """按范围状态统计 Evidence，供 UI、API 和日志共用。"""
+
+        return count_evidence_by_scope(self.evidence)
+
+
+def count_evidence_by_scope(
+    evidence: list[Evidence],
+) -> EvidenceScopeCounts:
+    """遍历一次 Evidence，生成三个互斥范围状态的统一统计。"""
+
+    counts = {
+        "in_scope": 0,
+        "out_of_scope": 0,
+        "uncertain": 0,
+    }
+    for item in evidence:
+        counts[item.scope_status] += 1
+    return EvidenceScopeCounts(**counts)
 
 
 def parse_competitors(raw_value: str) -> list[str]:
@@ -191,8 +232,15 @@ def build_analysis_dimensions(
 def create_analysis_request(
     target_product: str,
     competitors_text: str,
+    market_name: str,
+    product_category: str,
+    target_buyer: str,
+    comparison_level: str,
     dimensions: list[str],
+    pricing_scope: Literal["api", "subscription"] = "subscription",
+    exclusions_text: str = "",
     official_domains_text: str = "",
+    monthly_call_count: int = 1_000,
 ) -> AnalysisRequest:
     """把 Streamlit 原始控件值转换成经过校验的请求。"""
 
@@ -205,7 +253,16 @@ def create_analysis_request(
     return AnalysisRequest(
         target_product=target_product,
         competitors=competitors,
-        dimensions=dimensions,
+        market_definition=MarketDefinition(
+            market_name=market_name,
+            product_category=product_category,
+            target_buyer=target_buyer or None,
+            comparison_level=comparison_level,
+            pricing_scope=pricing_scope,
+            monthly_call_count=monthly_call_count,
+            core_dimensions=dimensions,
+            exclusions=parse_custom_dimensions(exclusions_text),
+        ),
         official_domains_by_product=official_domains,
     )
 
@@ -315,13 +372,21 @@ def run_analysis(
     LOGGER.info(
         "analysis_completed analysis_id=%s elapsed_seconds=%.3f "
         "stage_count=%d evidence_count=%d research_error_count=%d "
-        "verification_passed=%s",
+        "in_scope_count=%d out_of_scope_count=%d uncertain_count=%d "
+        "verification_passed=%s citations_valid=%s scope_consistent=%s "
+        "comparison_usable=%s",
         analysis_id,
         elapsed_seconds,
         len(result.stage_history),
         len(result.evidence),
         len(result.research_errors),
+        result.evidence_scope_counts.in_scope,
+        result.evidence_scope_counts.out_of_scope,
+        result.evidence_scope_counts.uncertain,
         result.verification_result.passed,
+        result.verification_result.citations_valid,
+        result.verification_result.scope_consistent,
+        result.verification_result.comparison_usable,
     )
     hook_manager.on_run_completed(
         build_run_result_summary(result)
@@ -359,6 +424,7 @@ def build_run_configuration_summary(
     return {
         "target_product": analysis_request.target_product,
         "competitor_count": len(analysis_request.competitors),
+        "market_definition": analysis_request.market_definition.model_dump(),
         "dimensions": list(analysis_request.dimensions),
         "dimension_count": len(analysis_request.dimensions),
         "official_domain_product_count": len(
@@ -372,12 +438,17 @@ def build_run_result_summary(
 ) -> dict[str, object]:
     """生成运行完成事件使用的结果摘要。"""
 
+    scope_counts = result.evidence_scope_counts
     return {
         "stage_count": len(result.stage_history),
         "stage_history": list(result.stage_history),
         "evidence_count": len(result.evidence),
+        "evidence_scope_counts": scope_counts.model_dump(),
         "research_error_count": len(result.research_errors),
         "verification_passed": result.verification_result.passed,
+        "citations_valid": result.verification_result.citations_valid,
+        "scope_consistent": result.verification_result.scope_consistent,
+        "comparison_usable": result.verification_result.comparison_usable,
     }
 
 
@@ -461,10 +532,11 @@ def _run_analysis_workflow(
     planner_input = PlannerInput(
         target_product=analysis_request.target_product,
         competitors=analysis_request.competitors,
-        dimensions=analysis_request.dimensions,
+        market_definition=analysis_request.market_definition,
     )
     initial_state = create_initial_state(
         planner_input=planner_input,
+        market_definition=analysis_request.market_definition,
         official_domains_by_product=(
             analysis_request.official_domains_by_product
         ),
@@ -506,8 +578,13 @@ def _run_analysis_workflow(
 
     return AnalysisRunResult(
         final_report=final_report,
+        market_definition=final_state["market_definition"],
         stage_history=final_state["stage_history"],
-        evidence=final_state["evidence"],
+        evidence=[
+            *final_state["evidence"],
+            *final_state["excluded_evidence"],
+            *final_state["uncertain_evidence"],
+        ],
         verification_result=verification_result,
         research_errors=final_state["research_errors"],
     )

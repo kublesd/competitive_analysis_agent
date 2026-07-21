@@ -58,6 +58,16 @@
           "evidence_ids": ["E1", "E4"]
         }
       ],
+      "recommendations": [
+        {
+          "target_scenario": "Mid-sized company IT and business leaders selecting a team workspace",
+          "tradeoff_or_gap": "Atlas Notes documents public pricing while Beacon Docs has a plan without a public price.",
+          "recommended_action": "Validate pricing terms and template workflows in a buyer-specific pilot before selection.",
+          "product_names": ["Atlas Notes", "Beacon Docs"],
+          "evidence_ids": ["E1", "E2", "E4"],
+          "limitations": ["The supplied profiles do not establish total cost or implementation fit."]
+        }
+      ],
       "conclusion": {
         "claim": "The supplied profiles show different collaboration strengths and different levels of pricing clarity.",
         "claim_type": "interpretation",

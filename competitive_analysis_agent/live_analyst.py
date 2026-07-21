@@ -16,7 +16,9 @@ from competitive_analysis_agent.live_config import (
     load_live_settings,
 )
 from competitive_analysis_agent.schemas import (
+    DimensionFinding,
     FeatureItem,
+    MarketDefinition,
     PricingPlan,
     ProductProfile,
 )
@@ -78,6 +80,18 @@ def build_live_sample_profiles() -> list[ProductProfile]:
                     evidence_ids=["E1"],
                 )
             ],
+            dimension_findings=[
+                DimensionFinding(
+                    dimension="features",
+                    facts=["Reusable templates are documented."],
+                    evidence_ids=["E1"],
+                ),
+                DimensionFinding(
+                    dimension="pricing",
+                    facts=["The Team plan lists 12 USD per user monthly."],
+                    evidence_ids=["E2"],
+                ),
+            ],
             pricing=[
                 PricingPlan(
                     plan_name="Team",
@@ -96,6 +110,18 @@ def build_live_sample_profiles() -> list[ProductProfile]:
                     evidence_ids=["E3"],
                 )
             ],
+            dimension_findings=[
+                DimensionFinding(
+                    dimension="features",
+                    facts=["Collaborative pages are documented."],
+                    evidence_ids=["E3"],
+                ),
+                DimensionFinding(
+                    dimension="pricing",
+                    facts=["The Business plan has no public price."],
+                    evidence_ids=["E4"],
+                ),
+            ],
             pricing=[
                 PricingPlan(
                     plan_name="Business",
@@ -111,6 +137,19 @@ def build_live_sample_profiles() -> list[ProductProfile]:
     ]
 
 
+def build_live_market_definition() -> MarketDefinition:
+    """创建真实 Analyst 验收使用的同层级市场范围。"""
+
+    return MarketDefinition(
+        market_name="Team knowledge workspace",
+        product_category="SaaS collaboration software",
+        target_buyer="Mid-sized company IT and business leaders",
+        comparison_level="Team subscription product",
+        core_dimensions=["features", "pricing"],
+        exclusions=["consumer plans", "API usage pricing"],
+    )
+
+
 def run_smoke_test(
     settings: Settings | None = None,
 ) -> dict[str, object]:
@@ -118,7 +157,10 @@ def run_smoke_test(
 
     current_settings = settings or load_live_settings()
     analyst = create_live_analyst(current_settings)
-    analyst_input = AnalystInput(profiles=build_live_sample_profiles())
+    analyst_input = AnalystInput(
+        profiles=build_live_sample_profiles(),
+        market_definition=build_live_market_definition(),
+    )
     analysis = analyst.analyze(analyst_input)
     return analysis.model_dump(mode="json")
 

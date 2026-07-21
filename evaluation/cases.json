@@ -1,0 +1,26 @@
+[
+  {
+    "case_id": "fully_comparable",
+    "description": "两个同层级产品均有功能和价格资料。",
+    "scenario": "fully_comparable",
+    "core_dimensions": ["features", "pricing"],
+    "expected_verification_passed": true,
+    "expected_excluded_titles": []
+  },
+  {
+    "case_id": "cross_product_line_contamination",
+    "description": "同品牌消费端套餐混入搜索结果，但必须在提取前排除。",
+    "scenario": "cross_product_line_contamination",
+    "core_dimensions": ["features", "pricing"],
+    "expected_verification_passed": true,
+    "expected_excluded_titles": ["Beacon Docs Consumer Plan"]
+  },
+  {
+    "case_id": "insufficient_in_scope_data",
+    "description": "两个产品都缺少范围内治理资料，报告必须披露资料不足。",
+    "scenario": "insufficient_in_scope_data",
+    "core_dimensions": ["features", "pricing", "governance"],
+    "expected_verification_passed": false,
+    "expected_excluded_titles": []
+  }
+]

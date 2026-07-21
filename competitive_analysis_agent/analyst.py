@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
+from copy import deepcopy
 from typing import Literal, Protocol
 
 from pydantic import Field, ValidationError, model_validator
@@ -19,9 +20,13 @@ from competitive_analysis_agent.schemas import (
     ContractModel,
     EvidenceId,
     FeatureItem,
+    MarketDefinition,
+    ModelProfile,
+    PriceRate,
     ProductProfile,
     PricingPlan,
     RequiredText,
+    SupportStatus,
 )
 
 
@@ -52,7 +57,9 @@ ANALYST_SYSTEM_PROMPT = """
    只要输入画像中存在 Evidence，结论就必须引用用于形成结论的 evidence_ids。
    优先直接总结各产品已观察到的事实，不要使用“更好”“独特”等证据未定义的评价词。
 8. 写 fact 时尽量贴近 ProductProfile 中 feature.name、feature.description、
-   pricing.plan_name、price 和 main_limits 的原文。不得把短标签扩写成更大的能力，
+   models[].pricing 或旧版 pricing.plan_name、price 和 main_limits 的原文。
+   模型费率必须写成“模型名 + input/output/cached/audio/Batch 方向 + 完整费率”，
+   不能写成两个笼统的 plan 数字。不得把短标签扩写成更大的能力，
    不得使用“has a section for / 提供某某完整能力”这类证据未直接支持的说法。
    如果 pricing.price 为 null，只能写“未提供公开价格”，绝不能写成 $0 或 Free。
    如果 pricing.price 是普通数字，也不得擅自补美元符号或其他货币单位。
@@ -73,15 +80,49 @@ ANALYST_SYSTEM_PROMPT = """
     features claim，只保留最直接、最短、证据措辞最接近的事实。
 15. 如果 Verifier 指出 conclusion 不受支持，不要继续总结具体功能优劣；
     改为只总结画像中直接可见的定位、功能和价格差异。
-16. 只输出 JSON 对象，不要添加 Markdown 或解释。
-17. 顶层格式必须是：
+16. 只比较 MarketDefinition.core_dimensions 中选择的维度，并遵守 product_category、
+    comparison_level 和 exclusions。不得把不同产品层级或不同计费口径强行排序。
+17. 每个产品都要在 product_assessments 中给出 strengths、shortcomings、data_gaps 和
+    confidence。strengths/shortcomings 只能引用画像中的已记录功能、限制、价格或模型字段；
+    未检索到资料只能写 data_gaps，绝不能写成“不支持”或“能力较弱”。
+18. scenario_recommendations 必须覆盖：编程 Agent、RAG 与知识库问答、长文档分析、
+    实时语音应用、多模态理解、低成本批处理、企业级 API 集成。每项都要写推荐产品、理由、
+    成本与能力权衡、关键 Evidence ID、主要限制、confidence 与尚未验证的信息。没有足够
+    直接证据时 recommended_product 写“暂无可验证推荐”，并把原因写入未验证信息；不得只按
+    价格判定整体优劣。
+19. market_opportunities 最多写三项共同未解决或体验不统一的问题，例如跨模型成本难预测、
+    定价结构复杂、限流规则不透明、多模型路由困难、企业监控与预算治理困难。每项必须包含
+    用户痛点、竞品现状、市场空白、可行产品方向、支撑 Evidence ID 和推断置信度。资料仅
+    未覆盖某项时，明确说“尚未验证”，不得声称任何产品不支持。
+20. recommendations 与事实和 interpretation 分开。每项建议必须包含目标场景、
+    竞品取舍或资料空白、建议动作、相关产品、Evidence ID 和限制条件；目标场景应面向
+    target_buyer。资料不足时明确写“资料不足”，不得猜测或强行给出产品排名。
+21. conclusion 要回答适合谁、适合什么场景、依据和待验证风险，不要重复功能清单；同时填写
+    conclusion_confidence。
+22. 只输出 JSON 对象，不要添加 Markdown 或解释。
+23. 顶层格式必须是：
 {
   "analysis": {
     "products": ["..."],
     "positioning": [],
     "features": [],
     "pricing": [],
+    "dimension_comparisons": [],
     "opportunities": [],
+    "recommendations": [
+      {
+        "target_scenario": "...",
+        "tradeoff_or_gap": "...",
+        "recommended_action": "...",
+        "product_names": ["..."],
+        "evidence_ids": ["..."],
+        "limitations": ["..."]
+      }
+    ],
+    "product_assessments": [],
+    "scenario_recommendations": [],
+    "market_opportunities": [],
+    "conclusion_confidence": "low",
     "conclusion": {
       "claim": "...",
       "claim_type": "interpretation",
@@ -179,6 +220,68 @@ class AnalysisClaim(ContractModel):
         return self
 
 
+class ActionableRecommendation(ContractModel):
+    """面向目标购买者、带证据和适用边界的建议。"""
+
+    target_scenario: RequiredText
+    tradeoff_or_gap: RequiredText
+    recommended_action: RequiredText
+    product_names: list[RequiredText] = Field(min_length=1)
+    evidence_ids: list[EvidenceId] = Field(min_length=1)
+    limitations: list[RequiredText] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_references(self) -> "ActionableRecommendation":
+        """拒绝重复产品、证据和限制，保持建议可追溯。"""
+
+        if len(self.product_names) != len(set(self.product_names)):
+            raise ValueError("Recommendation product_names must be unique.")
+        if len(self.evidence_ids) != len(set(self.evidence_ids)):
+            raise ValueError("Recommendation evidence_ids must be unique.")
+        if len(self.limitations) != len(set(self.limitations)):
+            raise ValueError("Recommendation limitations must be unique.")
+        return self
+
+
+ConfidenceLevel = Literal["high", "medium", "low"]
+
+
+class ProductAssessment(ContractModel):
+    """一个产品的证据化优势、已知限制、数据缺口与置信度。"""
+
+    product_name: RequiredText
+    strengths: list[AnalysisClaim] = Field(default_factory=list)
+    shortcomings: list[AnalysisClaim] = Field(default_factory=list)
+    data_gaps: list[RequiredText] = Field(default_factory=list)
+    confidence: ConfidenceLevel
+
+
+class ScenarioRecommendation(ContractModel):
+    """一个业务场景的谨慎选型结论；无足够证据时不虚构推荐。"""
+
+    scenario: RequiredText
+    recommended_product: RequiredText
+    recommendation_reason: RequiredText
+    cost_capability_tradeoff: RequiredText
+    evidence_ids: list[EvidenceId] = Field(default_factory=list)
+    primary_limitations: list[RequiredText] = Field(default_factory=list)
+    confidence: ConfidenceLevel
+    unverified_information: list[RequiredText] = Field(default_factory=list)
+
+
+class MarketOpportunity(ContractModel):
+    """由共同资料缺口或已记录差异推导出的市场机会。"""
+
+    title: RequiredText
+    user_pain: RequiredText
+    competitor_status: RequiredText
+    market_gap: RequiredText
+    product_direction: RequiredText
+    product_names: list[RequiredText] = Field(min_length=1)
+    evidence_ids: list[EvidenceId] = Field(default_factory=list)
+    inference_confidence: ConfidenceLevel
+
+
 class CompetitiveAnalysis(ContractModel):
     """保存定位、功能、价格、机会点和结论的结构化比较。"""
 
@@ -186,7 +289,21 @@ class CompetitiveAnalysis(ContractModel):
     positioning: list[AnalysisClaim] = Field(default_factory=list)
     features: list[AnalysisClaim] = Field(default_factory=list)
     pricing: list[AnalysisClaim] = Field(default_factory=list)
+    dimension_comparisons: list[AnalysisClaim] = Field(default_factory=list)
     opportunities: list[AnalysisClaim] = Field(default_factory=list)
+    recommendations: list[ActionableRecommendation] = Field(
+        default_factory=list
+    )
+    product_assessments: list[ProductAssessment] = Field(
+        default_factory=list
+    )
+    scenario_recommendations: list[ScenarioRecommendation] = Field(
+        default_factory=list
+    )
+    market_opportunities: list[MarketOpportunity] = Field(
+        default_factory=list
+    )
+    conclusion_confidence: ConfidenceLevel = "low"
     conclusion: AnalysisClaim
 
     @model_validator(mode="after")
@@ -212,6 +329,7 @@ class AnalystInput(ContractModel):
     """保存至少两个产品画像，并拒绝重复产品和跨产品重复 ID。"""
 
     profiles: list[ProductProfile] = Field(min_length=2)
+    market_definition: MarketDefinition | None = None
     revision_feedback: list[RequiredText] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -386,7 +504,7 @@ class Analyst:
                 analyst_input=analyst_input,
             )
             return validated_repair.analysis
-        except AnalystValidationError as second_error:
+        except AnalystValidationError:
             # 修复后仍无效时，用确定性 fallback 保住已完成的研究和提取结果。
             return build_fallback_analysis(analyst_input)
 
@@ -421,10 +539,18 @@ def build_analyst_messages(
         ensure_ascii=False,
         indent=2,
     )
+    market_definition_json = json.dumps(
+        analyst_input.market_definition.model_dump(mode="json")
+        if analyst_input.market_definition is not None
+        else None,
+        ensure_ascii=False,
+        indent=2,
+    )
     user_message = (
-        "请只根据以下 ProductProfile 生成结构化竞品比较。\n"
+        "请只根据以下 MarketDefinition 和 ProductProfile 生成结构化竞品比较。\n"
         "输入顺序就是 products 必须使用的顺序。\n\n"
-        f"{profiles_json}"
+        f"MarketDefinition:\n{market_definition_json}\n\n"
+        f"ProductProfile:\n{profiles_json}"
     )
     if analyst_input.revision_feedback:
         feedback_json = json.dumps(
@@ -487,23 +613,425 @@ def build_fallback_analysis(
     feature_claims = build_fallback_feature_claims(
         profiles=analyst_input.profiles,
         revision_feedback=analyst_input.revision_feedback,
-    )
+    ) if market_dimension_is_selected(
+        analyst_input.market_definition, "features"
+    ) else []
     pricing_claims = build_fallback_pricing_claims(
         analyst_input.profiles
-    )
+    ) if market_dimension_is_selected(
+        analyst_input.market_definition, "pricing"
+    ) else []
+    dimension_claims = build_fallback_dimension_claims(analyst_input)
     opportunity_claims = build_fallback_opportunity_claims(
+        analyst_input.profiles,
+        market_definition=analyst_input.market_definition,
+    )
+    recommendations = build_fallback_recommendations(
+        analyst_input=analyst_input,
+        opportunity_claims=opportunity_claims,
+    )
+    product_assessments = build_product_assessments(analyst_input.profiles)
+    scenario_recommendations = build_scenario_recommendations(
         analyst_input.profiles
     )
-    conclusion = build_fallback_conclusion(analyst_input.profiles)
+    market_opportunities = build_market_opportunities(analyst_input.profiles)
+    conclusion = build_fallback_conclusion(
+        analyst_input.profiles,
+        market_definition=analyst_input.market_definition,
+    )
 
     return CompetitiveAnalysis(
         products=product_names,
         positioning=positioning_claims,
         features=feature_claims,
         pricing=pricing_claims,
+        dimension_comparisons=dimension_claims,
         opportunities=opportunity_claims,
+        recommendations=recommendations,
+        product_assessments=product_assessments,
+        scenario_recommendations=scenario_recommendations,
+        market_opportunities=market_opportunities,
+        conclusion_confidence=confidence_from_evidence(
+            collect_profile_evidence_ids_in_order(analyst_input.profiles)
+        ),
         conclusion=conclusion,
     )
+
+
+def market_dimension_is_selected(
+    market_definition: MarketDefinition | None,
+    section: Literal["positioning", "features", "pricing"],
+) -> bool:
+    """用少量通用别名判断固定章节是否属于用户选择维度。"""
+
+    if market_definition is None:
+        return True
+    aliases = {
+        "positioning": {"positioning", "定位"},
+        "features": {
+            "feature",
+            "features",
+            "function",
+            "functions",
+            "功能",
+            "model_capabilities",
+        },
+        "pricing": {
+            "price",
+            "pricing",
+            "cost",
+            "价格",
+            "定价",
+            "成本",
+            "api_pricing",
+        },
+    }
+    selected = {item.casefold() for item in market_definition.core_dimensions}
+    return bool(selected.intersection(aliases[section]))
+
+
+def build_fallback_dimension_claims(
+    analyst_input: AnalystInput,
+) -> list[AnalysisClaim]:
+    """按用户维度顺序把 DimensionFinding 转成带引用的事实。"""
+
+    market = analyst_input.market_definition
+    if market is None:
+        return []
+    selected_dimensions = {
+        dimension.casefold() for dimension in market.core_dimensions
+    }
+    claims: list[AnalysisClaim] = []
+    for profile in analyst_input.profiles:
+        for finding in profile.dimension_findings:
+            if finding.dimension.casefold() not in selected_dimensions:
+                continue
+            for fact in finding.facts:
+                claims.append(
+                    AnalysisClaim(
+                        claim=(
+                            f"{profile.product_name} — "
+                            f"{finding.dimension}: {fact}"
+                        ),
+                        claim_type="fact",
+                        product_names=[profile.product_name],
+                        evidence_ids=list(finding.evidence_ids),
+                    )
+                )
+    return claims
+
+
+SCENARIO_LABELS = (
+    "编程 Agent",
+    "RAG 与知识库问答",
+    "长文档分析",
+    "实时语音应用",
+    "多模态理解",
+    "低成本批处理",
+    "企业级 API 集成",
+)
+
+
+def build_product_assessments(
+    profiles: Sequence[ProductProfile],
+) -> list[ProductAssessment]:
+    """由统一字段生成逐产品结论，不把未采集字段误判为短板。"""
+
+    assessments: list[ProductAssessment] = []
+    for profile in profiles:
+        strengths = [
+            AnalysisClaim(
+                claim=f"{profile.product_name} mentions {feature.name}.",
+                claim_type="fact",
+                product_names=[profile.product_name],
+                evidence_ids=list(feature.evidence_ids),
+            )
+            for feature in profile.features[:3]
+        ]
+        shortcomings = [
+            AnalysisClaim(
+                claim=(
+                    f"{profile.product_name} documents the {plan.plan_name} "
+                    f"constraint: {limit}."
+                ),
+                claim_type="fact",
+                product_names=[profile.product_name],
+                evidence_ids=list(plan.evidence_ids),
+            )
+            for plan in profile.pricing
+            for limit in plan.main_limits[:1]
+        ]
+        data_gaps = profile_data_gaps(profile)
+        evidence_ids = collect_profile_evidence_ids(profile)
+        assessments.append(
+            ProductAssessment(
+                product_name=profile.product_name,
+                strengths=strengths,
+                shortcomings=shortcomings,
+                data_gaps=data_gaps,
+                confidence=confidence_from_evidence(evidence_ids),
+            )
+        )
+    return assessments
+
+
+def profile_data_gaps(profile: ProductProfile) -> list[str]:
+    """缺字段只标为待验证资料，不推断产品不支持。"""
+
+    gaps: list[str] = []
+    if not profile.models:
+        gaps.append("未收集模型能力、模态和上下文窗口资料。")
+    if not any(model.rate_limits for model in profile.models) and not profile.rate_limits:
+        gaps.append("未收集可验证的限流规则资料。")
+    if not profile.enterprise_capabilities:
+        gaps.append("未收集企业监控、预算或治理能力资料。")
+    if profile.models and not any(
+        model.pricing.input_price and model.pricing.output_price
+        for model in profile.models
+    ):
+        gaps.append("未收集可计算的输入与输出 Token 价格组合。")
+    return gaps
+
+
+def confidence_from_evidence(evidence_ids: Sequence[str] | set[str]) -> ConfidenceLevel:
+    """以可追溯证据数量给出保守置信度，而非能力强弱评分。"""
+
+    count = len(evidence_ids)
+    if count >= 3:
+        return "high"
+    if count:
+        return "medium"
+    return "low"
+
+
+def build_scenario_recommendations(
+    profiles: Sequence[ProductProfile],
+) -> list[ScenarioRecommendation]:
+    """只在统一字段直接支持场景时推荐产品；并列或缺资料时明确待验证。"""
+
+    recommendations: list[ScenarioRecommendation] = []
+    for scenario in SCENARIO_LABELS:
+        candidates = [
+            (profile, scenario_evidence_ids(profile, scenario))
+            for profile in profiles
+        ]
+        candidates = [item for item in candidates if item[1]]
+        best_count = max((len(ids) for _, ids in candidates), default=0)
+        best = [item for item in candidates if len(item[1]) == best_count]
+        if len(best) != 1:
+            recommendations.append(
+                ScenarioRecommendation(
+                    scenario=scenario,
+                    recommended_product="暂无可验证推荐",
+                    recommendation_reason="当前统一字段不足以形成唯一、可验证的推荐。",
+                    cost_capability_tradeoff="未形成成本或能力排名，避免仅按价格判断整体优劣。",
+                    confidence="low",
+                    unverified_information=[
+                        "需补充该场景所需能力、限制与实际工作负载的同范围证据。"
+                    ],
+                )
+            )
+            continue
+        profile, evidence_ids = best[0]
+        recommendations.append(
+            ScenarioRecommendation(
+                scenario=scenario,
+                recommended_product=profile.product_name,
+                recommendation_reason=(
+                    f"{profile.product_name} 的统一模型字段直接记录了该场景相关能力。"
+                ),
+                cost_capability_tradeoff=build_cost_capability_tradeoff(profile),
+                evidence_ids=evidence_ids,
+                primary_limitations=profile_data_gaps(profile),
+                confidence="high" if len(evidence_ids) >= 2 else "medium",
+                unverified_information=[
+                    "尚未验证真实业务负载、延迟和质量表现；不据此作整体产品优劣判断。"
+                ],
+            )
+        )
+    return recommendations
+
+
+def scenario_evidence_ids(
+    profile: ProductProfile,
+    scenario: str,
+) -> list[str]:
+    """返回场景所需的明确字段来源；空列表代表资料不足而非不支持。"""
+
+    evidence_ids: list[str] = []
+    for model in profile.models:
+        capabilities = " ".join(model.model_capabilities or []).casefold()
+        modalities = {item.value for item in model.supported_modalities or []}
+        supported = {
+            "编程 Agent": (
+                model.tool_calling == SupportStatus.SUPPORTED
+                or model.structured_output == SupportStatus.SUPPORTED
+                or "code" in capabilities
+            ),
+            "RAG 与知识库问答": (
+                model.prompt_caching == SupportStatus.SUPPORTED
+                or (model.context_window_tokens or 0) >= 32_000
+            ),
+            "长文档分析": (model.context_window_tokens or 0) >= 128_000,
+            "实时语音应用": (
+                model.realtime == SupportStatus.SUPPORTED and "audio" in modalities
+            ),
+            "多模态理解": len(modalities) >= 2,
+            "低成本批处理": model.batch_api == SupportStatus.SUPPORTED,
+            "企业级 API 集成": bool(profile.enterprise_capabilities),
+        }[scenario]
+        if supported:
+            evidence_ids.extend(item.evidence_id for item in model.source_evidence)
+            evidence_ids.extend(model.pricing.evidence_ids())
+    if scenario == "企业级 API 集成" and profile.enterprise_capabilities:
+        evidence_ids.extend(item.evidence_id for item in profile.source_evidence)
+        evidence_ids.extend(item.evidence_id for item in profile.field_evidence)
+    return deduplicate_preserving_order(evidence_ids)
+
+
+def build_cost_capability_tradeoff(profile: ProductProfile) -> str:
+    """把成本放在已验证能力的语境中，禁止把价格当成整体排名。"""
+
+    has_token_price = any(
+        model.pricing.input_price and model.pricing.output_price
+        for model in profile.models
+    )
+    if has_token_price:
+        return "已收集可计算 Token 成本；仍需结合已验证能力、质量和限流评估。"
+    return "尚无完整 Token 成本组合；不以单一价格或缺失价格判断产品优劣。"
+
+
+def build_market_opportunities(
+    profiles: Sequence[ProductProfile],
+) -> list[MarketOpportunity]:
+    """将共同待验证字段转成低置信度产品方向，不声称产品不支持。"""
+
+    product_names = [profile.product_name for profile in profiles]
+    model_evidence = deduplicate_preserving_order(
+        evidence_id
+        for profile in profiles
+        for model in profile.models
+        for evidence_id in [item.evidence_id for item in model.source_evidence]
+    )
+    pricing_evidence = deduplicate_preserving_order(
+        evidence_id
+        for profile in profiles
+        for plan in profile.pricing
+        for evidence_id in plan.evidence_ids
+    )
+    all_evidence = deduplicate_preserving_order(
+        [*model_evidence, *pricing_evidence]
+    )
+    opportunity_specs = [
+        (
+            "跨模型成本可预测性",
+            "用户难以在调用前预估跨模型与不同计费方式的总成本。",
+            "当前资料记录了部分模型或套餐价格，但工作负载下的成本与能力组合仍需验证。",
+            "提供按场景、缓存和 Batch 条件计算并解释成本差异的统一视图。",
+            "构建成本预算、路由模拟与价格变更提醒。",
+            [*model_evidence, *pricing_evidence],
+        ),
+        (
+            "限流与多模型路由透明度",
+            "应用团队难以预判高峰时的吞吐、回退和路由行为。",
+            "当前统一字段对限流和路由的覆盖不完整；这表示资料待验证，不表示产品不支持。",
+            "将限流、上下文和模型能力归一为可比较的运行约束。",
+            "提供运行前容量检查、路由规则说明与回退演练。",
+            model_evidence or all_evidence,
+        ),
+        (
+            "企业预算与治理可见性",
+            "企业采购与平台团队需要把调用成本、权限和监控放入同一治理流程。",
+            "企业能力及预算治理资料在当前画像中仍有待验证部分。",
+            "把未验证项显式呈现为采购核验清单，而不是推断能力缺失。",
+            "提供预算告警、审计轨迹和供应商能力核验工作流。",
+            all_evidence,
+        ),
+    ]
+    return [
+        MarketOpportunity(
+            title=title,
+            user_pain=pain,
+            competitor_status=status,
+            market_gap=gap,
+            product_direction=direction,
+            product_names=product_names,
+            evidence_ids=deduplicate_preserving_order(evidence_ids),
+            inference_confidence=("medium" if evidence_ids else "low"),
+        )
+        for title, pain, status, gap, direction, evidence_ids in opportunity_specs
+    ]
+
+
+def build_fallback_recommendations(
+    analyst_input: AnalystInput,
+    opportunity_claims: Sequence[AnalysisClaim] | None = None,
+) -> list[ActionableRecommendation]:
+    """把有引用的机会点转成目标购买者可执行的保守建议。"""
+
+    opportunities = list(
+        opportunity_claims
+        if opportunity_claims is not None
+        else build_fallback_opportunity_claims(analyst_input.profiles)
+    )
+    if not opportunities:
+        dimension_claims = build_fallback_dimension_claims(analyst_input)
+        if dimension_claims:
+            opportunities = [
+                AnalysisClaim(
+                    claim=(
+                        "当前同范围资料展示了所选维度的事实差异；"
+                        "未被证据覆盖的维度为资料不足。"
+                    ),
+                    claim_type="interpretation",
+                    product_names=deduplicate_preserving_order(
+                        product_name
+                        for claim in dimension_claims
+                        for product_name in claim.product_names
+                    ),
+                    evidence_ids=deduplicate_preserving_order(
+                        evidence_id
+                        for claim in dimension_claims
+                        for evidence_id in claim.evidence_ids
+                    ),
+                )
+            ]
+    market = analyst_input.market_definition
+    target_scenario = (
+        market.target_buyer
+        if market is not None and market.target_buyer is not None
+        else market.comparison_level
+        if market is not None
+        else "本次选型的目标购买者"
+    )
+    dimension = (
+        market.core_dimensions[0]
+        if market is not None
+        else "已记录差异"
+    )
+    recommendations: list[ActionableRecommendation] = []
+
+    for opportunity in opportunities:
+        if not opportunity.evidence_ids:
+            continue
+        recommendations.append(
+            ActionableRecommendation(
+                target_scenario=target_scenario,
+                tradeoff_or_gap=opportunity.claim,
+                recommended_action=(
+                    f"围绕“{dimension}”开展同范围试用或采购核验，"
+                    "再根据实际场景做选择。"
+                ),
+                product_names=list(opportunity.product_names),
+                evidence_ids=list(opportunity.evidence_ids),
+                limitations=[
+                    "资料仅限当前已采集的同范围证据；未覆盖项为资料不足，"
+                    "不据此进行产品排名。"
+                ],
+            )
+        )
+
+    return recommendations[:3]
 
 
 def build_fallback_positioning_claims(
@@ -617,10 +1145,20 @@ def build_fallback_feature_claims(
 def build_fallback_pricing_claims(
     profiles: Sequence[ProductProfile],
 ) -> list[AnalysisClaim]:
-    """把画像中的价格项转换成最短事实 claim。"""
+    """把画像中的模型费率或旧版套餐转换成完整语义 claim。"""
 
     claims: list[AnalysisClaim] = []
     for profile in profiles:
+        if profile.models:
+            for model in profile.models:
+                claims.extend(
+                    build_model_pricing_claims(
+                        product_name=profile.product_name,
+                        model=model,
+                    )
+                )
+            continue
+
         for pricing_plan in profile.pricing:
             claim_text = format_fallback_pricing_claim(
                 product_name=profile.product_name,
@@ -628,6 +1166,7 @@ def build_fallback_pricing_claims(
                 price=pricing_plan.price,
                 billing_cycle=pricing_plan.billing_cycle,
                 main_limits=pricing_plan.main_limits,
+                unit=pricing_plan.unit,
             )
             claims.append(
                 AnalysisClaim(
@@ -641,16 +1180,127 @@ def build_fallback_pricing_claims(
     return claims
 
 
+def build_model_pricing_claims(
+    product_name: str,
+    model: ModelProfile,
+) -> list[AnalysisClaim]:
+    """从一个模型对象生成带价格方向的事实，绝不把费率拆成套餐。"""
+
+    claims: list[AnalysisClaim] = []
+    price_fields = [
+        ("input", model.pricing.input_price),
+        ("cached input", model.pricing.cached_input_price),
+        ("output", model.pricing.output_price),
+        (
+            "audio input",
+            model.pricing.audio_input_price or model.pricing.audio_price,
+        ),
+        ("audio output", model.pricing.audio_output_price),
+        ("Batch input", model.pricing.batch_input_price),
+        ("Batch cached input", model.pricing.batch_cached_input_price),
+        ("Batch output", model.pricing.batch_output_price),
+    ]
+    for price_direction, price_value in price_fields:
+        rates = price_value if isinstance(price_value, list) else [price_value]
+        for rate in rates:
+            if rate is None:
+                continue
+            claims.append(
+                AnalysisClaim(
+                    claim=format_model_price_claim(
+                        model_name=model.model_name,
+                        price_direction=price_direction,
+                        rate=rate,
+                    ),
+                    claim_type="fact",
+                    product_names=[product_name],
+                    evidence_ids=list(rate.evidence_ids),
+                )
+            )
+
+    # ModelProfile 不保存厂商名；调用方在这里统一回填所属产品，避免复制价格逻辑。
+    return claims
+
+
+def format_model_price_claim(
+    model_name: str,
+    price_direction: str,
+    rate: PriceRate,
+) -> str:
+    """把原子费率格式化为模型、方向、金额、单位和有效期完整的 claim。"""
+
+    amount_text = format(rate.amount, "f")
+    if "." in amount_text:
+        amount_text = amount_text.rstrip("0").rstrip(".")
+    price_text = (
+        f"${amount_text}"
+        if rate.currency.value == "USD"
+        else f"{amount_text} {rate.currency.value}"
+    )
+    quantity_text = format_price_quantity(rate.per_quantity)
+    unit_text = format_price_unit(rate.unit.value, rate.per_quantity)
+    claim = (
+        f"{model_name} {price_direction} price is {price_text} "
+        f"per {quantity_text}{unit_text}"
+    )
+    if rate.effective_from is not None:
+        claim += f", effective from {rate.effective_from.isoformat()}"
+    if rate.effective_to is not None:
+        claim += f" through {rate.effective_to.isoformat()}"
+    if rate.condition:
+        claim += f" ({rate.condition})"
+    return claim + "."
+
+
+def format_price_quantity(per_quantity: int) -> str:
+    """用常见自然语言表达价格计量基数。"""
+
+    if per_quantity == 1_000_000:
+        return "million "
+    if per_quantity == 1_000:
+        return "thousand "
+    if per_quantity == 1:
+        return ""
+    return f"{per_quantity:,} "
+
+
+def format_price_unit(unit: str, per_quantity: int) -> str:
+    """把 Schema 单位转换为适合 claim 的可读形式。"""
+
+    labels = {
+        "token": "token",
+        "request": "request",
+        "image": "image",
+        "audio_minute": "audio minute",
+        "character": "character",
+        "second": "second",
+        "other": "unit",
+    }
+    label = labels[unit]
+    return label if per_quantity == 1 else f"{label}s"
+
+
 def format_fallback_pricing_claim(
     product_name: str,
     plan_name: str,
     price: str | None,
     billing_cycle: str | None,
     main_limits: list[str],
+    unit: str | None = None,
 ) -> str:
     """格式化一个不会猜测未知价格的 pricing fallback claim。"""
 
-    if price is None:
+    price_identity = split_legacy_model_price_identity(plan_name)
+    if price is not None and price_identity is not None:
+        model_name, price_direction = price_identity
+        claim = f"{model_name} {price_direction} price is {price}"
+        if (
+            unit
+            and " per " not in price.casefold()
+            and "/" not in price
+        ):
+            claim += f" per {unit}"
+    elif price is None:
         claim = (
             f"{product_name} names {choose_indefinite_article(plan_name)} "
             f"{plan_name} plan without a "
@@ -667,6 +1317,31 @@ def format_fallback_pricing_claim(
     _ = main_limits
 
     return claim + "."
+
+
+def split_legacy_model_price_identity(
+    plan_name: str,
+) -> tuple[str, str] | None:
+    """兼容旧 PricingPlan，把末尾价格方向还原为模型费率语义。"""
+
+    normalized_name = plan_name.casefold()
+    directions = (
+        "batch cached input",
+        "batch input",
+        "batch output",
+        "cached input",
+        "audio",
+        "input",
+        "output",
+    )
+    for direction in directions:
+        suffix = f" {direction}"
+        if not normalized_name.endswith(suffix):
+            continue
+        model_name = plan_name[: -len(suffix)].strip()
+        if model_name:
+            return model_name, direction
+    return None
 
 
 def format_feature_mentions(features: Sequence[FeatureItem]) -> str:
@@ -697,16 +1372,25 @@ def format_pricing_mentions(pricing_plans: Sequence[PricingPlan]) -> str:
 
 def build_fallback_opportunity_claims(
     profiles: Sequence[ProductProfile],
+    market_definition: MarketDefinition | None = None,
 ) -> list[AnalysisClaim]:
     """从画像差异中生成个人项目可用的轻量机会点。"""
 
     claims: list[AnalysisClaim] = []
 
-    pricing_opportunity = build_pricing_clarity_opportunity(profiles)
+    pricing_opportunity = (
+        build_pricing_clarity_opportunity(profiles)
+        if market_dimension_is_selected(market_definition, "pricing")
+        else None
+    )
     if pricing_opportunity is not None:
         claims.append(pricing_opportunity)
 
-    feature_opportunity = build_feature_contrast_opportunity(profiles)
+    feature_opportunity = (
+        build_feature_contrast_opportunity(profiles)
+        if market_dimension_is_selected(market_definition, "features")
+        else None
+    )
     if feature_opportunity is not None:
         claims.append(feature_opportunity)
 
@@ -806,6 +1490,7 @@ def build_feature_contrast_opportunity(
 
 def build_fallback_conclusion(
     profiles: Sequence[ProductProfile],
+    market_definition: MarketDefinition | None = None,
 ) -> AnalysisClaim:
     """生成比空泛兜底句更有信息量、但仍不夸大的结论。"""
 
@@ -829,6 +1514,15 @@ def build_fallback_conclusion(
         claim_text = (
             "The supplied profiles provide limited comparable details for "
             f"{' and '.join(product_names)}."
+        )
+
+    if market_definition is not None:
+        buyer = market_definition.target_buyer or "目标购买者"
+        claim_text += (
+            f" For {buyer} evaluating {market_definition.comparison_level}, "
+            "these cited differences are the current decision basis; pending "
+            "risks and uncovered dimensions remain 资料不足 and require "
+            "buyer-specific validation."
         )
 
     return AnalysisClaim(
@@ -1028,20 +1722,57 @@ def normalize_analysis_output(
     normalized_analysis = normalize_pricing_fact_claims(
         analysis=normalized_analysis,
         profiles=analyst_input.profiles,
+        market_definition=analyst_input.market_definition,
     )
     normalized_analysis = normalize_opportunities(
         analysis=normalized_analysis,
         profiles=analyst_input.profiles,
         revision_feedback=analyst_input.revision_feedback,
     )
+    if not normalized_analysis.dimension_comparisons:
+        normalized_analysis = normalized_analysis.model_copy(
+            update={
+                "dimension_comparisons": build_fallback_dimension_claims(
+                    analyst_input
+                )
+            }
+        )
+    if not normalized_analysis.recommendations:
+        normalized_analysis = normalized_analysis.model_copy(
+            update={
+                "recommendations": build_fallback_recommendations(
+                    analyst_input=analyst_input,
+                    opportunity_claims=normalized_analysis.opportunities,
+                )
+            }
+        )
+    # 新横向分析完全由统一画像字段派生，避免模型把未检索项写成能力结论。
+    normalized_analysis = normalized_analysis.model_copy(
+        update={
+            "product_assessments": build_product_assessments(
+                analyst_input.profiles
+            ),
+            "scenario_recommendations": build_scenario_recommendations(
+                analyst_input.profiles
+            ),
+            "market_opportunities": build_market_opportunities(
+                analyst_input.profiles
+            ),
+            "conclusion_confidence": confidence_from_evidence(
+                collect_profile_evidence_ids_in_order(analyst_input.profiles)
+            ),
+        }
+    )
     normalized_analysis = normalize_conclusion_after_feedback(
         analysis=normalized_analysis,
         profiles=analyst_input.profiles,
+        market_definition=analyst_input.market_definition,
         revision_feedback=analyst_input.revision_feedback,
     )
     normalized_analysis = fill_missing_lightweight_analysis_sections(
         analysis=normalized_analysis,
         profiles=analyst_input.profiles,
+        market_definition=analyst_input.market_definition,
     )
 
     if normalized_analysis is analysis:
@@ -1151,6 +1882,8 @@ def has_feature_revision_feedback(
             continue
         if "unsupported_claim" in normalized_feedback:
             return True
+        if "partially_supported" in normalized_feedback:
+            return True
         if "conflicting_evidence" in normalized_feedback:
             return True
 
@@ -1160,15 +1893,43 @@ def has_feature_revision_feedback(
 def normalize_pricing_fact_claims(
     analysis: CompetitiveAnalysis,
     profiles: Sequence[ProductProfile],
+    market_definition: MarketDefinition | None = None,
 ) -> CompetitiveAnalysis:
     """把单产品价格事实收窄成 ProductProfile 中的套餐原文。"""
 
     pricing_plans_by_product = build_pricing_plans_by_product(profiles)
-    normalized_pricing_claims: list[AnalysisClaim] = []
+    include_model_pricing = market_dimension_is_selected(
+        market_definition,
+        "pricing",
+    )
+    model_pricing_product_names = {
+        profile.product_name
+        for profile in profiles
+        if profile.models and include_model_pricing
+    }
+    normalized_pricing_claims = [
+        claim
+        for profile in profiles
+        if profile.models and include_model_pricing
+        for claim in build_fallback_pricing_claims([profile])
+    ]
     changed = False
-    seen_pricing_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+    seen_pricing_keys: set[tuple[str, str, tuple[str, ...]]] = {
+        (
+            claim.product_names[0],
+            claim.claim,
+            tuple(claim.evidence_ids),
+        )
+        for claim in normalized_pricing_claims
+    }
 
     for pricing_claim in analysis.pricing:
+        if (
+            len(pricing_claim.product_names) == 1
+            and pricing_claim.product_names[0] in model_pricing_product_names
+        ):
+            changed = True
+            continue
         normalized_claim = normalize_single_pricing_fact_claim(
             claim=pricing_claim,
             pricing_plans_by_product=pricing_plans_by_product,
@@ -1193,6 +1954,9 @@ def normalize_pricing_fact_claims(
 
         seen_pricing_keys.add(pricing_key)
         normalized_pricing_claims.append(normalized_claim)
+
+    if model_pricing_product_names:
+        changed = True
 
     if not changed:
         return analysis
@@ -1227,6 +1991,7 @@ def normalize_single_pricing_fact_claim(
         price=matched_pricing_plan.price,
         billing_cycle=matched_pricing_plan.billing_cycle,
         main_limits=matched_pricing_plan.main_limits,
+        unit=matched_pricing_plan.unit,
     )
     return AnalysisClaim(
         claim=canonical_claim,
@@ -1373,6 +2138,8 @@ def has_opportunity_revision_feedback(
             continue
         if "unsupported_claim" in normalized_feedback:
             return True
+        if "partially_supported" in normalized_feedback:
+            return True
         if "conflicting_evidence" in normalized_feedback:
             return True
 
@@ -1406,7 +2173,13 @@ def collect_unsupported_feature_feedback_texts(
     feedback_texts: list[str] = []
     for feedback_item in revision_feedback:
         normalized_feedback = feedback_item.lower()
-        if "unsupported_claim" not in normalized_feedback:
+        if not any(
+            issue_type in normalized_feedback
+            for issue_type in (
+                "unsupported_claim",
+                "partially_supported",
+            )
+        ):
             continue
         if "features[" not in normalized_feedback:
             continue
@@ -1617,6 +2390,7 @@ def tokenize_feature_text(text: str) -> set[str]:
 def normalize_conclusion_after_feedback(
     analysis: CompetitiveAnalysis,
     profiles: Sequence[ProductProfile],
+    market_definition: MarketDefinition | None,
     revision_feedback: Sequence[str],
 ) -> CompetitiveAnalysis:
     """重试轮退回可见画像摘要，避免模型把结论越写越宽。"""
@@ -1625,7 +2399,12 @@ def normalize_conclusion_after_feedback(
         return analysis
 
     return analysis.model_copy(
-        update={"conclusion": build_fallback_conclusion(profiles)}
+        update={
+            "conclusion": build_fallback_conclusion(
+                profiles,
+                market_definition=market_definition,
+            )
+        }
     )
 
 
@@ -1638,7 +2417,13 @@ def has_unsupported_conclusion_feedback(
         normalized_feedback = feedback_item.lower()
         if (
             normalized_feedback.startswith("conclusion ")
-            and "unsupported_claim" in normalized_feedback
+            and any(
+                issue_type in normalized_feedback
+                for issue_type in (
+                    "unsupported_claim",
+                    "partially_supported",
+                )
+            )
         ):
             return True
     return False
@@ -1647,6 +2432,7 @@ def has_unsupported_conclusion_feedback(
 def fill_missing_lightweight_analysis_sections(
     analysis: CompetitiveAnalysis,
     profiles: Sequence[ProductProfile],
+    market_definition: MarketDefinition | None = None,
 ) -> CompetitiveAnalysis:
     """补齐模型为空或过度保守的定位、机会点和结论。"""
 
@@ -1658,12 +2444,18 @@ def fill_missing_lightweight_analysis_sections(
             updates["positioning"] = positioning_claims
 
     if not analysis.opportunities:
-        opportunity_claims = build_fallback_opportunity_claims(profiles)
+        opportunity_claims = build_fallback_opportunity_claims(
+            profiles,
+            market_definition=market_definition,
+        )
         if opportunity_claims:
             updates["opportunities"] = opportunity_claims
 
     if is_low_information_conclusion(analysis.conclusion.claim):
-        updates["conclusion"] = build_fallback_conclusion(profiles)
+        updates["conclusion"] = build_fallback_conclusion(
+            profiles,
+            market_definition=market_definition,
+        )
 
     if not updates:
         return analysis
@@ -1699,19 +2491,11 @@ def collect_profile_evidence_ids_in_order(
     seen_evidence_ids: set[str] = set()
 
     for profile in profiles:
-        for feature in profile.features:
-            for evidence_id in feature.evidence_ids:
-                if evidence_id in seen_evidence_ids:
-                    continue
-                seen_evidence_ids.add(evidence_id)
-                evidence_ids.append(evidence_id)
-
-        for pricing_plan in profile.pricing:
-            for evidence_id in pricing_plan.evidence_ids:
-                if evidence_id in seen_evidence_ids:
-                    continue
-                seen_evidence_ids.add(evidence_id)
-                evidence_ids.append(evidence_id)
+        for evidence_id in iter_profile_evidence_ids(profile):
+            if evidence_id in seen_evidence_ids:
+                continue
+            seen_evidence_ids.add(evidence_id)
+            evidence_ids.append(evidence_id)
 
     return evidence_ids
 
@@ -1722,11 +2506,14 @@ def validate_analyst_output(
 ) -> AnalystOutput:
     """校验输出结构、产品覆盖、claim 类型和 Evidence ID 归属。"""
 
+    normalized_output = remove_unreferenced_fact_claims(raw_output)
     try:
-        if isinstance(raw_output, str):
-            analyst_output = AnalystOutput.model_validate_json(raw_output)
+        if isinstance(normalized_output, str):
+            analyst_output = AnalystOutput.model_validate_json(
+                normalized_output
+            )
         else:
-            analyst_output = AnalystOutput.model_validate(raw_output)
+            analyst_output = AnalystOutput.model_validate(normalized_output)
     except ValidationError as error:
         raise AnalystValidationError(
             f"Output does not match AnalystOutput: {error}"
@@ -1743,13 +2530,6 @@ def validate_analyst_output(
             f"actual={analysis.products!r}"
         )
 
-    pricing_claim_paths = collect_feature_pricing_claim_paths(analysis)
-    if pricing_claim_paths:
-        joined_paths = ", ".join(pricing_claim_paths)
-        raise AnalystValidationError(
-            f"Feature section contains pricing claims: {joined_paths}"
-        )
-
     evidence_ids_by_product = collect_evidence_ids_by_product(
         analyst_input.profiles
     )
@@ -1762,6 +2542,17 @@ def validate_analyst_output(
             evidence_ids_by_product=evidence_ids_by_product,
         )
         mentioned_products.update(claim.product_names)
+
+    for recommendation in analysis.recommendations:
+        validate_recommendation_references(
+            recommendation=recommendation,
+            evidence_ids_by_product=evidence_ids_by_product,
+        )
+
+    validate_selected_analysis_sections(
+        analysis=analysis,
+        market_definition=analyst_input.market_definition,
+    )
 
     missing_products = set(expected_products) - mentioned_products
     if missing_products:
@@ -1797,6 +2588,101 @@ def validate_analyst_output(
         )
 
     return analyst_output
+
+
+def remove_unreferenced_fact_claims(raw_output: object) -> object:
+    """只移除无引用事实，保留同次模型输出中的其余有效分析。"""
+
+    if isinstance(raw_output, str):
+        try:
+            output_data = json.loads(raw_output)
+        except (json.JSONDecodeError, TypeError):
+            return raw_output
+    elif isinstance(raw_output, dict):
+        output_data = deepcopy(raw_output)
+    else:
+        return raw_output
+
+    if not isinstance(output_data, dict):
+        return output_data
+    analysis = output_data.get("analysis")
+    if not isinstance(analysis, dict):
+        return output_data
+
+    claim_sections = (
+        "positioning",
+        "features",
+        "pricing",
+        "dimension_comparisons",
+        "opportunities",
+    )
+    for section_name in claim_sections:
+        claims = analysis.get(section_name)
+        if not isinstance(claims, list):
+            continue
+        analysis[section_name] = [
+            claim
+            for claim in claims
+            if not (
+                isinstance(claim, dict)
+                and claim.get("claim_type") == "fact"
+                and claim.get("evidence_ids") in (None, [])
+            )
+        ]
+
+    return output_data
+
+
+def validate_selected_analysis_sections(
+    analysis: CompetitiveAnalysis,
+    market_definition: MarketDefinition | None,
+) -> None:
+    """拒绝模型比较用户未选择的固定维度。"""
+
+    if market_definition is None:
+        return
+    sections = {
+        "features": analysis.features,
+        "pricing": analysis.pricing,
+    }
+    excluded_sections = [
+        name
+        for name, claims in sections.items()
+        if claims and not market_dimension_is_selected(market_definition, name)
+    ]
+    if excluded_sections:
+        excluded_text = ", ".join(excluded_sections)
+        raise AnalystValidationError(
+            "Analysis contains unselected dimensions: " + excluded_text
+        )
+
+
+def validate_recommendation_references(
+    recommendation: ActionableRecommendation,
+    evidence_ids_by_product: dict[str, set[str]],
+) -> None:
+    """确保建议只引用其相关产品名下的已知证据。"""
+
+    allowed_products = set(evidence_ids_by_product)
+    unknown_products = set(recommendation.product_names) - allowed_products
+    if unknown_products:
+        unknown_text = ", ".join(sorted(unknown_products))
+        raise AnalystValidationError(
+            f"Recommendation references unknown products: {unknown_text}"
+        )
+
+    allowed_evidence_ids: set[str] = set()
+    for product_name in recommendation.product_names:
+        allowed_evidence_ids.update(evidence_ids_by_product[product_name])
+    invalid_evidence_ids = (
+        set(recommendation.evidence_ids) - allowed_evidence_ids
+    )
+    if invalid_evidence_ids:
+        invalid_text = ", ".join(sorted(invalid_evidence_ids))
+        raise AnalystValidationError(
+            "Recommendation references evidence outside its products: "
+            f"{invalid_text}"
+        )
 
 
 def validate_claim_references(
@@ -1854,13 +2740,34 @@ def collect_profile_evidence_ids(
 ) -> set[str]:
     """收集一个产品画像中功能和价格项的全部 Evidence ID。"""
 
-    evidence_ids: set[str] = set()
+    return set(iter_profile_evidence_ids(profile))
+
+
+def iter_profile_evidence_ids(profile: ProductProfile) -> list[str]:
+    """集中暴露画像、模型、价格和限流的可引用来源。"""
+
+    evidence_ids: list[str] = []
+
+    evidence_ids.extend(item.evidence_id for item in profile.source_evidence)
+    evidence_ids.extend(item.evidence_id for item in profile.field_evidence)
+
+    for dimension_finding in profile.dimension_findings:
+        evidence_ids.extend(dimension_finding.evidence_ids)
 
     for feature in profile.features:
-        evidence_ids.update(feature.evidence_ids)
+        evidence_ids.extend(feature.evidence_ids)
 
     for pricing_plan in profile.pricing:
-        evidence_ids.update(pricing_plan.evidence_ids)
+        evidence_ids.extend(pricing_plan.evidence_ids)
+
+    for rate_limit in profile.rate_limits or []:
+        evidence_ids.extend(rate_limit.evidence_ids)
+
+    for model in profile.models:
+        evidence_ids.extend(item.evidence_id for item in model.source_evidence)
+        evidence_ids.extend(model.pricing.evidence_ids())
+        for rate_limit in model.rate_limits or []:
+            evidence_ids.extend(rate_limit.evidence_ids)
 
     return evidence_ids
 
@@ -1889,6 +2796,39 @@ def collect_analysis_claims(
     claims.extend(analysis.positioning)
     claims.extend(analysis.features)
     claims.extend(analysis.pricing)
+    claims.extend(analysis.dimension_comparisons)
     claims.extend(analysis.opportunities)
+    for assessment in analysis.product_assessments:
+        claims.extend(assessment.strengths)
+        claims.extend(assessment.shortcomings)
+    for recommendation in analysis.scenario_recommendations:
+        product_names = (
+            [recommendation.recommended_product]
+            if recommendation.recommended_product in analysis.products
+            else list(analysis.products)
+        )
+        claims.append(
+            AnalysisClaim(
+                claim=(
+                    f"{recommendation.scenario}: "
+                    f"{recommendation.recommendation_reason}"
+                ),
+                claim_type="interpretation",
+                product_names=product_names,
+                evidence_ids=list(recommendation.evidence_ids),
+            )
+        )
+    for opportunity in analysis.market_opportunities:
+        claims.append(
+            AnalysisClaim(
+                claim=(
+                    f"{opportunity.title}: {opportunity.competitor_status} "
+                    f"{opportunity.market_gap}"
+                ),
+                claim_type="interpretation",
+                product_names=list(opportunity.product_names),
+                evidence_ids=list(opportunity.evidence_ids),
+            )
+        )
     claims.append(analysis.conclusion)
     return claims

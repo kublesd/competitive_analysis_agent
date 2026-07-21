@@ -8,10 +8,10 @@ from competitive_analysis_agent.planner import (
     FakePlannerModel,
     LangChainPlannerModel,
     Planner,
-    PlannerError,
     PlannerInput,
     PlannerOutput,
 )
+from competitive_analysis_agent.schemas import MarketDefinition
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "planner_outputs.json"
@@ -29,7 +29,14 @@ def _build_planner_input() -> PlannerInput:
     return PlannerInput(
         target_product="Atlas Notes",
         competitors=["Beacon Docs"],
-        dimensions=["features", "pricing"],
+        market_definition=MarketDefinition(
+            market_name="团队知识管理工具",
+            product_category="SaaS 协作软件",
+            target_buyer="中型企业 IT 与业务负责人",
+            comparison_level="企业订阅产品",
+            core_dimensions=["features", "pricing"],
+            exclusions=["消费端套餐", "API 用量价格"],
+        ),
     )
 
 
@@ -72,6 +79,19 @@ class FailingPlannerModel:
 
 
 class PlannerTest(unittest.TestCase):
+    def test_deterministic_planner_does_not_call_model(self) -> None:
+        # 任务矩阵完全由已校验输入决定，不应再受模型格式或可用性影响。
+        tasks = Planner(FailingPlannerModel()).plan(_build_planner_input())
+
+        self.assertEqual(len(tasks), 4)
+        self.assertEqual(
+            tasks[0].query,
+            (
+                "Atlas Notes SaaS 协作软件 企业订阅产品 features official "
+                "exclude 消费端套餐 exclude API 用量价格"
+            ),
+        )
+
     def test_valid_output_covers_every_product_and_dimension(self) -> None:
         # 两个产品乘以两个维度，应得到四条独立调研任务。
         fixture = _load_planner_outputs()
@@ -93,10 +113,10 @@ class PlannerTest(unittest.TestCase):
                 ("Beacon Docs", "pricing"),
             },
         )
-        self.assertEqual(model.invocation_count, 1)
+        self.assertEqual(model.invocation_count, 0)
 
-    def test_missing_coverage_is_repaired_once(self) -> None:
-        # 首次漏掉一个维度时，Planner 应反馈错误并接受一次修复。
+    def test_model_missing_coverage_cannot_change_deterministic_plan(self) -> None:
+        # 旧模型即使漏维度，也不会再影响确定性任务矩阵。
         fixture = _load_planner_outputs()
         model = FakePlannerModel(
             [fixture["missing_coverage"], fixture["valid"]]
@@ -106,22 +126,54 @@ class PlannerTest(unittest.TestCase):
         tasks = planner.plan(_build_planner_input())
 
         self.assertEqual(len(tasks), 4)
-        self.assertEqual(model.invocation_count, 2)
-        repair_message = model.received_messages[1][-1]["content"]
-        self.assertIn("missing=Beacon Docs/pricing", repair_message)
+        self.assertEqual(model.invocation_count, 0)
+        self.assertIn(
+            ("Beacon Docs", "pricing"),
+            {(task.product_name, task.topic) for task in tasks},
+        )
 
-    def test_invalid_output_stops_after_one_failed_repair(self) -> None:
-        # 连续两次格式错误后立即停止，防止无限模型调用。
+    def test_deterministic_queries_always_include_market_scope(self) -> None:
+        # 查询范围直接由结构化输入拼接，不依赖模型逐字复制。
+        fixture = _load_planner_outputs()
+        model = FakePlannerModel(
+            [fixture["missing_query_scope"], fixture["valid"]]
+        )
+        planner = Planner(model)
+
+        tasks = planner.plan(_build_planner_input())
+
+        self.assertEqual(len(tasks), 4)
+        self.assertEqual(model.invocation_count, 0)
+        self.assertTrue(
+            all("企业订阅产品" in task.query for task in tasks)
+        )
+
+    def test_queries_contain_market_scope_and_exclusions(self) -> None:
+        # 市场定义必须逐条进入查询，供 Researcher 后续聚焦和审计。
+        fixture = _load_planner_outputs()
+        model = FakePlannerModel([fixture["valid"]])
+        planner = Planner(model)
+
+        tasks = planner.plan(_build_planner_input())
+
+        for task in tasks:
+            self.assertIn("SaaS 协作软件", task.query)
+            self.assertIn("企业订阅产品", task.query)
+            self.assertIn("exclude 消费端套餐", task.query)
+            self.assertIn("exclude API 用量价格", task.query)
+
+    def test_invalid_model_output_is_not_consulted(self) -> None:
+        # 确定性 Planner 不再因模型 JSON 格式错误阻塞工作流。
         fixture = _load_planner_outputs()
         model = FakePlannerModel(
             [fixture["invalid_shape"], fixture["invalid_shape"]]
         )
         planner = Planner(model)
 
-        with self.assertRaises(PlannerError):
-            planner.plan(_build_planner_input())
+        tasks = planner.plan(_build_planner_input())
 
-        self.assertEqual(model.invocation_count, 2)
+        self.assertEqual(len(tasks), 4)
+        self.assertEqual(model.invocation_count, 0)
 
     def test_langchain_wrapper_binds_planner_output_schema(self) -> None:
         # LangChain 模型必须先绑定 PlannerOutput，再执行结构化调用。
@@ -129,9 +181,8 @@ class PlannerTest(unittest.TestCase):
         structured_model = FakePlannerModel([fixture["valid"]])
         chat_model = FakeChatModel(structured_model)
         planner_model = LangChainPlannerModel(chat_model)
-        planner = Planner(planner_model)
-
-        tasks = planner.plan(_build_planner_input())
+        raw_output = planner_model.invoke([])
+        tasks = PlannerOutput.model_validate(raw_output).tasks
 
         self.assertIs(chat_model.received_schema, PlannerOutput)
         self.assertEqual(chat_model.received_method, "json_mode")
@@ -139,8 +190,8 @@ class PlannerTest(unittest.TestCase):
         self.assertEqual(len(tasks), 4)
         self.assertEqual(structured_model.invocation_count, 1)
 
-    def test_langchain_raw_parse_failure_enters_repair_flow(self) -> None:
-        # LangChain 解析失败时，原始文本仍应交给 Planner 的一次修复逻辑。
+    def test_legacy_langchain_wrapper_preserves_raw_parse_failure(self) -> None:
+        # 旧包装器仍保留原始文本，兼容已有独立调用方。
         fixture = _load_planner_outputs()
         invalid_json = json.dumps(
             fixture["invalid_shape"],
@@ -160,25 +211,18 @@ class PlannerTest(unittest.TestCase):
         ]
         structured_model = FakePlannerModel(model_responses)
         planner_model = LangChainPlannerModel(FakeChatModel(structured_model))
-        planner = Planner(planner_model)
+        raw_output = planner_model.invoke([])
+
+        self.assertEqual(raw_output, invalid_json)
+        self.assertEqual(structured_model.invocation_count, 1)
+
+    def test_model_failure_cannot_block_planning(self) -> None:
+        # Planner 不调用供应商，因此供应商不可用也能继续进入 Researcher。
+        planner = Planner(FailingPlannerModel())
 
         tasks = planner.plan(_build_planner_input())
 
         self.assertEqual(len(tasks), 4)
-        self.assertEqual(structured_model.invocation_count, 2)
-
-    def test_model_call_failure_exposes_safe_public_detail(self) -> None:
-        # 供应商异常可能包含敏感文本，页面详情只能展示脱敏后的定位信息。
-        planner = Planner(FailingPlannerModel())
-
-        with self.assertRaises(PlannerError) as captured_error:
-            planner.plan(_build_planner_input())
-
-        public_detail = captured_error.exception.public_detail
-        self.assertIn("Planner 调用模型服务失败", public_detail)
-        self.assertIn("底层异常类型：RuntimeError", public_detail)
-        self.assertIn("2 个产品、2 个维度", public_detail)
-        self.assertNotIn("secret-token-must-not-be-shown", public_detail)
 
     def test_duplicate_dimensions_are_rejected_before_model_call(self) -> None:
         # 重复维度会制造重复任务，应在进入模型前直接拒绝。
@@ -186,7 +230,12 @@ class PlannerTest(unittest.TestCase):
             PlannerInput(
                 target_product="Atlas Notes",
                 competitors=["Beacon Docs"],
-                dimensions=["pricing", "pricing"],
+                market_definition=MarketDefinition(
+                    market_name="团队知识管理工具",
+                    product_category="SaaS 协作软件",
+                    comparison_level="企业订阅产品",
+                    core_dimensions=["pricing", "pricing"],
+                ),
             )
 
 

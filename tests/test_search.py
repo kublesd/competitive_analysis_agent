@@ -139,6 +139,14 @@ class SearchAdapterTest(unittest.TestCase):
 
         self.assertEqual(source_type, "third_party")
 
+    def test_vendor_forum_subdomain_is_third_party(self) -> None:
+        source_type = classify_source(
+            "https://discuss.ai.google.dev/t/pricing-question/123",
+            ["ai.google.dev"],
+        )
+
+        self.assertEqual(source_type, "third_party")
+
 
 class FakeHttpResponse:
     """模拟 urllib 响应上下文，避免测试访问真实 Tavily。"""
@@ -234,6 +242,100 @@ class TavilySearchProviderTest(unittest.TestCase):
         http_request = mocked_urlopen.call_args.args[0]
         request_payload = json.loads(http_request.data.decode("utf-8"))
         self.assertTrue(request_payload["include_raw_content"])
+
+    def test_advanced_search_extracts_top_pricing_result(self) -> None:
+        # 价格检索先召回 URL，再用 Tavily Extract 返回查询聚焦的 Markdown。
+        search_response = {
+            "results": [
+                {
+                    "title": "OpenAI API Pricing",
+                    "url": "https://openai.com/api/pricing",
+                    "content": "OpenAI API model pricing.",
+                    "score": 0.97,
+                }
+            ]
+        }
+        extract_response = {
+            "results": [
+                {
+                    "url": "https://openai.com/api/pricing",
+                    "raw_content": (
+                        "| Model | Input | Output |\n"
+                        "| GPT-5 | $1.25 / 1M tokens | $10 / 1M tokens |"
+                    ),
+                }
+            ]
+        }
+        provider = TavilySearchProvider("test-key")
+
+        with patch(
+            "competitive_analysis_agent.search.urlopen",
+            side_effect=[
+                FakeHttpResponse(search_response),
+                FakeHttpResponse(extract_response),
+            ],
+        ) as mocked_urlopen:
+            results = provider.search(
+                SearchRequest(
+                    query="OpenAI API official pricing",
+                    official_domains=["openai.com"],
+                    search_depth="advanced",
+                    chunks_per_source=3,
+                    include_raw_content=True,
+                    extract_query="OpenAI API input output token pricing",
+                    extract_top_results=1,
+                )
+            )
+
+        self.assertEqual(mocked_urlopen.call_count, 2)
+        self.assertTrue(results[0].extracted_content)
+        self.assertIn("| Model |", results[0].raw_content)
+        search_request = mocked_urlopen.call_args_list[0].args[0]
+        search_payload = json.loads(search_request.data.decode("utf-8"))
+        self.assertEqual(search_payload["search_depth"], "advanced")
+        self.assertEqual(search_payload["chunks_per_source"], 3)
+        self.assertFalse(search_payload["include_raw_content"])
+        extract_request = mocked_urlopen.call_args_list[1].args[0]
+        self.assertEqual(extract_request.full_url, "https://api.tavily.com/extract")
+        extract_payload = json.loads(extract_request.data.decode("utf-8"))
+        self.assertEqual(extract_payload["extract_depth"], "advanced")
+        self.assertEqual(
+            extract_payload["query"],
+            "OpenAI API input output token pricing",
+        )
+
+    def test_extract_failure_keeps_search_result_with_warning(self) -> None:
+        # Extract 是增强步骤；失败时保留 Search 摘要，供 Researcher 继续产出证据。
+        search_response = {
+            "results": [
+                {
+                    "title": "OpenAI API Pricing",
+                    "url": "https://openai.com/api/pricing",
+                    "content": "OpenAI API input and output token pricing.",
+                }
+            ]
+        }
+        provider = TavilySearchProvider("test-key", max_retries=0)
+
+        with patch(
+            "competitive_analysis_agent.search.urlopen",
+            side_effect=[
+                FakeHttpResponse(search_response),
+                URLError("extract unavailable"),
+            ],
+        ):
+            results = provider.search(
+                SearchRequest(
+                    query="OpenAI API pricing",
+                    extract_query="OpenAI API token pricing",
+                    extract_top_results=1,
+                )
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertIsNone(results[0].raw_content)
+        self.assertFalse(results[0].extracted_content)
+        self.assertIn("Tavily extract", results[0].extraction_error)
 
     def test_malformed_result_is_skipped_without_losing_valid_result(self) -> None:
         # 单条坏记录不应让同一次搜索中的其他来源全部失败。

@@ -19,6 +19,7 @@ SourceType = Literal["official", "third_party"]
 SearchStatus = Literal["success", "error"]
 SearchErrorCode = Literal["timeout", "provider_error"]
 TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search"
+TAVILY_EXTRACT_ENDPOINT = "https://api.tavily.com/extract"
 
 
 class SearchRequest(ContractModel):
@@ -28,6 +29,10 @@ class SearchRequest(ContractModel):
     official_domains: list[RequiredText] = Field(default_factory=list)
     max_results: int = Field(default=5, ge=1, le=10)
     include_raw_content: bool = False
+    search_depth: Literal["basic", "advanced"] = "basic"
+    chunks_per_source: int = Field(default=3, ge=1, le=3)
+    extract_query: str | None = None
+    extract_top_results: int = Field(default=0, ge=0, le=5)
 
 
 class ProviderSearchResult(ContractModel):
@@ -37,6 +42,8 @@ class ProviderSearchResult(ContractModel):
     url: HttpUrl
     snippet: RequiredText
     raw_content: str | None = None
+    extracted_content: bool = False
+    extraction_error: str | None = None
 
 
 class SearchResult(ContractModel):
@@ -46,6 +53,8 @@ class SearchResult(ContractModel):
     url: HttpUrl
     snippet: RequiredText
     raw_content: str | None = None
+    extracted_content: bool = False
+    extraction_error: str | None = None
     source_type: SourceType
 
 
@@ -115,6 +124,7 @@ class TavilySearchProvider:
         api_key: str,
         *,
         endpoint: str = TAVILY_SEARCH_ENDPOINT,
+        extract_endpoint: str = TAVILY_EXTRACT_ENDPOINT,
         timeout_seconds: float = 30.0,
         max_retries: int = 1,
     ) -> None:
@@ -126,26 +136,36 @@ class TavilySearchProvider:
 
         self._api_key = normalized_api_key
         self._endpoint = endpoint
+        self._extract_endpoint = extract_endpoint
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
 
     def search(self, request: SearchRequest) -> list[ProviderSearchResult]:
-        """执行一次基础搜索；超时可重试，其他失败交给适配器统一处理。"""
+        """执行搜索，并按请求对少量候选 URL 追加 Tavily Extract。"""
 
         payload: dict[str, object] = {
             "query": request.query,
-            # basic 搜索每次使用 1 credit，适合当前小规模同步研究。
-            "search_depth": "basic",
+            "search_depth": request.search_depth,
             "max_results": request.max_results,
             "include_answer": False,
-            "include_raw_content": request.include_raw_content,
+            # 追加 Extract 时不重复请求整页正文，Search 摘要保留为降级数据。
+            "include_raw_content": (
+                request.include_raw_content
+                and request.extract_top_results == 0
+            ),
             "include_images": False,
         }
         if request.official_domains:
             # 用户显式提供域名时优先搜索官方资料，避免模型猜测来源身份。
             payload["include_domains"] = request.official_domains
+        if request.search_depth == "advanced":
+            payload["chunks_per_source"] = request.chunks_per_source
 
-        response_payload = self._send_request_with_retries(payload)
+        response_payload = self._send_request_with_retries(
+            payload,
+            endpoint=self._endpoint,
+            operation="search",
+        )
         raw_results = response_payload.get("results")
         if not isinstance(raw_results, list):
             raise TavilySearchProviderError(
@@ -174,11 +194,96 @@ class TavilySearchProvider:
                 continue
             provider_results.append(provider_result)
 
-        return provider_results
+        if request.extract_top_results == 0 or not provider_results:
+            return provider_results
+
+        try:
+            return self._add_extracted_content(
+                provider_results=provider_results,
+                request=request,
+            )
+        except (TimeoutError, TavilySearchProviderError) as error:
+            # Extract 只是增强步骤；保留 Search 结果，并把降级原因交给 Reporter。
+            provider_results[0] = provider_results[0].model_copy(
+                update={"extraction_error": str(error)}
+            )
+            return provider_results
+
+    def _add_extracted_content(
+        self,
+        provider_results: list[ProviderSearchResult],
+        request: SearchRequest,
+    ) -> list[ProviderSearchResult]:
+        """对排名靠前的候选页执行查询聚焦的高级正文提取。"""
+
+        selected_results = provider_results[: request.extract_top_results]
+        payload: dict[str, object] = {
+            "urls": [str(result.url) for result in selected_results],
+            "extract_depth": "advanced",
+            "format": "markdown",
+            "query": request.extract_query or request.query,
+            "chunks_per_source": 3,
+        }
+        response_payload = self._send_request_with_retries(
+            payload,
+            endpoint=self._extract_endpoint,
+            operation="extract",
+        )
+        raw_results = response_payload.get("results")
+        if not isinstance(raw_results, list):
+            raise TavilySearchProviderError(
+                "Tavily extract response does not contain a results list."
+            )
+
+        extracted_content_by_url: dict[str, str] = {}
+        for raw_result in raw_results:
+            if not isinstance(raw_result, dict):
+                continue
+            raw_url = raw_result.get("url")
+            raw_content = normalize_optional_text(
+                raw_result.get("raw_content")
+            )
+            if raw_url is None or raw_content is None:
+                continue
+            try:
+                extracted_content_by_url[normalize_url(str(raw_url))] = (
+                    raw_content
+                )
+            except ValueError:
+                continue
+
+        enriched_results: list[ProviderSearchResult] = []
+        extracted_count = 0
+        for provider_result in provider_results:
+            normalized_result_url = normalize_url(provider_result.url)
+            extracted_content = extracted_content_by_url.get(
+                normalized_result_url
+            )
+            if extracted_content is None:
+                enriched_results.append(provider_result)
+                continue
+            enriched_results.append(
+                provider_result.model_copy(
+                    update={
+                        "raw_content": extracted_content,
+                        "extracted_content": True,
+                    }
+                )
+            )
+            extracted_count += 1
+
+        if extracted_count == 0:
+            raise TavilySearchProviderError(
+                "Tavily extract returned no usable content."
+            )
+        return enriched_results
 
     def _send_request_with_retries(
         self,
         payload: dict[str, object],
+        *,
+        endpoint: str,
+        operation: str,
     ) -> dict[str, object]:
         """对瞬时网络失败最多重试一次，避免单个任务轻易丢失证据。"""
 
@@ -186,7 +291,11 @@ class TavilySearchProvider:
         total_attempts = self._max_retries + 1
         for attempt_number in range(total_attempts):
             try:
-                return self._send_request(payload)
+                return self._send_request(
+                    payload,
+                    endpoint=endpoint,
+                    operation=operation,
+                )
             except TimeoutError as error:
                 last_error = error
             except TavilySearchProviderError as error:
@@ -201,14 +310,22 @@ class TavilySearchProvider:
         if last_error is not None:
             raise last_error
 
-        raise TavilySearchProviderError("Tavily search retry loop failed.")
+        raise TavilySearchProviderError(
+            f"Tavily {operation} retry loop failed."
+        )
 
-    def _send_request(self, payload: dict[str, object]) -> dict[str, object]:
+    def _send_request(
+        self,
+        payload: dict[str, object],
+        *,
+        endpoint: str,
+        operation: str,
+    ) -> dict[str, object]:
         """发送 HTTP 请求，并把底层异常转换成不包含密钥的错误。"""
 
         request_body = json.dumps(payload).encode("utf-8")
         http_request = Request(
-            self._endpoint,
+            endpoint,
             data=request_body,
             headers={
                 "Authorization": f"Bearer {self._api_key}",
@@ -225,28 +342,30 @@ class TavilySearchProvider:
             ) as response:
                 response_text = response.read().decode("utf-8")
         except (TimeoutError, socket.timeout) as error:
-            raise TimeoutError("Tavily search timed out.") from error
+            raise TimeoutError(f"Tavily {operation} timed out.") from error
         except HTTPError as error:
             raise TavilySearchProviderError(
-                f"Tavily search returned HTTP status {error.code}."
+                f"Tavily {operation} returned HTTP status {error.code}."
             ) from error
         except URLError as error:
             if isinstance(error.reason, (TimeoutError, socket.timeout)):
-                raise TimeoutError("Tavily search timed out.") from error
+                raise TimeoutError(
+                    f"Tavily {operation} timed out."
+                ) from error
             raise TavilySearchProviderError(
-                "Tavily search network request failed."
+                f"Tavily {operation} network request failed."
             ) from error
 
         try:
             parsed_response = json.loads(response_text)
         except json.JSONDecodeError as error:
             raise TavilySearchProviderError(
-                "Tavily search returned invalid JSON."
+                f"Tavily {operation} returned invalid JSON."
             ) from error
 
         if not isinstance(parsed_response, dict):
             raise TavilySearchProviderError(
-                "Tavily search returned an invalid response object."
+                f"Tavily {operation} returned an invalid response object."
             )
         return parsed_response
 
@@ -336,13 +455,17 @@ def classify_source(
     url: str | HttpUrl,
     official_domains: Sequence[str],
 ) -> SourceType:
-    """根据精确域名或其子域名判断来源是否官方。"""
+    """根据域名判断来源；厂商社区内容仍按第三方资料处理。"""
 
     result_hostname = urlsplit(str(url)).hostname
     if result_hostname is None:
         return "third_party"
 
     normalized_result_hostname = result_hostname.lower().rstrip(".")
+    if {"community", "discuss", "forum"}.intersection(
+        normalized_result_hostname.split(".")
+    ):
+        return "third_party"
     for official_domain in official_domains:
         normalized_official_domain = _normalize_domain(official_domain)
         is_exact_domain = (
@@ -383,6 +506,10 @@ def normalize_search_results(
             raw_content=normalize_optional_text(
                 provider_result.raw_content
             ),
+            extracted_content=provider_result.extracted_content,
+            extraction_error=normalize_optional_text(
+                provider_result.extraction_error
+            ),
             source_type=source_type,
         )
         normalized_results.append(normalized_result)
@@ -412,7 +539,7 @@ def _normalize_domain(domain: str) -> str:
 def is_retryable_tavily_error(error: TavilySearchProviderError) -> bool:
     """判断 Tavily 错误是否像瞬时网络问题，只有这类错误才重试。"""
 
-    return str(error) == "Tavily search network request failed."
+    return str(error).endswith("network request failed.")
 
 
 def normalize_optional_text(value: object) -> str | None:

@@ -9,12 +9,21 @@ from competitive_analysis_agent.application_workflow import (
     ApplicationSearchConfigurationError,
 )
 from competitive_analysis_agent.researcher import ResearchError
-from competitive_analysis_agent.schemas import Evidence
+from competitive_analysis_agent.schemas import Evidence, MarketDefinition
 from competitive_analysis_agent.ui_service import AnalysisRunResult
 from competitive_analysis_agent.verifier import VerificationResult
 
 
 FIXED_TIME = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
+MARKET_DEFINITION_PAYLOAD = {
+    "market_name": "团队知识管理工具",
+    "product_category": "SaaS 协作软件",
+    "target_buyer": "中型企业 IT 与业务负责人",
+    "comparison_level": "企业订阅产品",
+    "pricing_scope": "subscription",
+    "core_dimensions": ["features"],
+    "exclusions": ["消费端套餐"],
+}
 
 
 def build_api_run_result(
@@ -40,6 +49,9 @@ def build_api_run_result(
     )
     return AnalysisRunResult(
         final_report="# 竞品分析报告\n\nAtlas Notes has shared workspaces.",
+        market_definition=MarketDefinition.model_validate(
+            MARKET_DEFINITION_PAYLOAD
+        ),
         stage_history=[
             "planner",
             "researcher",
@@ -87,7 +99,7 @@ class ApiAppTest(unittest.TestCase):
             json={
                 "target_product": "Atlas Notes",
                 "competitors": ["Beacon Docs"],
-                "dimensions": ["features"],
+                "market_definition": MARKET_DEFINITION_PAYLOAD,
                 "official_domains_by_product": {
                     "Atlas Notes": ["example.com"],
                     "Beacon Docs": ["example.com"],
@@ -102,15 +114,35 @@ class ApiAppTest(unittest.TestCase):
         self.assertEqual(service_request.competitors, ["Beacon Docs"])
         self.assertEqual(service_request.dimensions, ["features"])
         self.assertEqual(
+            service_request.market_definition.comparison_level,
+            "企业订阅产品",
+        )
+        self.assertEqual(
             service_request.official_domains_by_product["Beacon Docs"],
             ["example.com"],
         )
 
         payload = response.json()
         self.assertIn("# 竞品分析报告", payload["final_report"])
+        self.assertEqual(
+            payload["market_definition"],
+            {**MARKET_DEFINITION_PAYLOAD, "monthly_call_count": 1_000},
+        )
         self.assertEqual(payload["verification_passed"], True)
+        self.assertEqual(payload["citations_valid"], True)
+        self.assertEqual(payload["scope_consistent"], True)
+        self.assertEqual(payload["comparison_usable"], True)
+        self.assertEqual(
+            payload["evidence_scope_counts"],
+            {"in_scope": 1, "out_of_scope": 0, "uncertain": 0},
+        )
         self.assertEqual(payload["stage_history"][-1], "reporter")
         self.assertEqual(payload["evidence"][0]["evidence_id"], "E1")
+        self.assertEqual(
+            payload["evidence"][0]["scope_status"],
+            "in_scope",
+        )
+        self.assertIn("scope_reason", payload["evidence"][0])
         self.assertEqual(
             payload["evidence"][0]["snippet_preview"],
             "Atlas Notes supports shared workspaces.",
@@ -131,7 +163,7 @@ class ApiAppTest(unittest.TestCase):
             json={
                 "target_product": "Atlas Notes",
                 "competitors": ["Beacon Docs"],
-                "dimensions": ["features"],
+                "market_definition": MARKET_DEFINITION_PAYLOAD,
                 "official_domains_by_product": {
                     "Unknown Product": ["example.com"],
                 },
@@ -142,6 +174,29 @@ class ApiAppTest(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["detail"]["error_type"], "ValidationError")
         self.assertIn("输入格式不正确", payload["detail"]["message"])
+
+    def test_analysis_endpoint_requires_market_definition(self) -> None:
+        # API 缺少市场范围时应由共享 Pydantic 契约直接拒绝。
+        client = TestClient(
+            create_app(
+                analysis_runner=lambda request: build_api_run_result(),
+                configure_logging=False,
+            )
+        )
+
+        response = client.post(
+            "/analyses",
+            json={
+                "target_product": "Atlas Notes",
+                "competitors": ["Beacon Docs"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn(
+            "market_definition",
+            json.dumps(response.json()),
+        )
 
     def test_analysis_endpoint_returns_configuration_error(self) -> None:
         # 缺少外部服务配置时返回 503，并继续隐藏内部异常原文。
@@ -162,7 +217,7 @@ class ApiAppTest(unittest.TestCase):
             json={
                 "target_product": "Atlas Notes",
                 "competitors": ["Beacon Docs"],
-                "dimensions": ["features"],
+                "market_definition": MARKET_DEFINITION_PAYLOAD,
             },
         )
 

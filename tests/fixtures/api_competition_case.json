@@ -1,0 +1,113 @@
+{
+  "target_product": "OpenAI API",
+  "competitors": ["Claude API", "Gemini API"],
+  "market_definition": {
+    "market_name": "生成式 AI API",
+    "product_category": "大语言模型 API",
+    "target_buyer": "开发团队、AI 产品负责人、企业技术团队",
+    "comparison_level": "模型 API 服务",
+    "pricing_scope": "api",
+    "core_dimensions": [
+      "model_capabilities",
+      "api_pricing",
+      "developer_platform",
+      "usage_limits"
+    ],
+    "exclusions": ["消费端订阅套餐", "按席位企业套餐"]
+  },
+  "official_domains_by_product": {
+    "OpenAI API": ["openai.com", "platform.openai.com"],
+    "Claude API": ["anthropic.com", "docs.anthropic.com"],
+    "Gemini API": ["ai.google.dev", "cloud.google.com"]
+  },
+  "planner_output": {
+    "tasks": [
+      {"product_name": "OpenAI API", "topic": "model_capabilities", "query": "OpenAI API 大语言模型 API 模型 API 服务 model_capabilities official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "OpenAI API", "topic": "api_pricing", "query": "OpenAI API 大语言模型 API 模型 API 服务 api_pricing official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "OpenAI API", "topic": "developer_platform", "query": "OpenAI API 大语言模型 API 模型 API 服务 developer_platform official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "OpenAI API", "topic": "usage_limits", "query": "OpenAI API 大语言模型 API 模型 API 服务 usage_limits official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Claude API", "topic": "model_capabilities", "query": "Claude API 大语言模型 API 模型 API 服务 model_capabilities official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Claude API", "topic": "api_pricing", "query": "Claude API 大语言模型 API 模型 API 服务 api_pricing official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Claude API", "topic": "developer_platform", "query": "Claude API 大语言模型 API 模型 API 服务 developer_platform official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Claude API", "topic": "usage_limits", "query": "Claude API 大语言模型 API 模型 API 服务 usage_limits official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Gemini API", "topic": "model_capabilities", "query": "Gemini API 大语言模型 API 模型 API 服务 model_capabilities official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Gemini API", "topic": "api_pricing", "query": "Gemini API 大语言模型 API 模型 API 服务 api_pricing official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Gemini API", "topic": "developer_platform", "query": "Gemini API 大语言模型 API 模型 API 服务 developer_platform official exclude 消费端订阅套餐 exclude 按席位企业套餐"},
+      {"product_name": "Gemini API", "topic": "usage_limits", "query": "Gemini API 大语言模型 API 模型 API 服务 usage_limits official exclude 消费端订阅套餐 exclude 按席位企业套餐"}
+    ]
+  },
+  "search_results": {
+    "OpenAI API official models multimodal capabilities": [
+      {"title": "OpenAI API Models", "url": "https://platform.openai.com/docs/models", "snippet": "OpenAI API models support text, image, reasoning, and tool use capabilities."}
+    ],
+    "OpenAI API official API pricing input output tokens": [
+      {"title": "OpenAI API Pricing", "url": "https://openai.com/api/pricing", "snippet": "OpenAI API pricing lists GPT-5 input tokens and output tokens.", "raw_content": "OpenAI API GPT-5 input tokens cost $1.25 per 1M input tokens."},
+      {"title": "OpenAI API 消费端订阅套餐", "url": "https://openai.com/chatgpt/pricing", "snippet": "ChatGPT Plus is a 消费端订阅套餐 at $20 per month.", "raw_content": "ChatGPT Plus costs $20 per month."}
+    ],
+    "OpenAI API official API documentation SDK tools": [
+      {"title": "OpenAI API Documentation", "url": "https://platform.openai.com/docs", "snippet": "OpenAI API documentation provides SDK guides and function calling tools."}
+    ],
+    "OpenAI API official context window rate limits": [
+      {"title": "OpenAI API Rate Limits", "url": "https://platform.openai.com/docs/guides/rate-limits", "snippet": "OpenAI API usage limits include model context window and rate limit tiers."}
+    ],
+    "Claude API official models multimodal capabilities": [
+      {"title": "Claude API Models", "url": "https://docs.anthropic.com/en/docs/about-claude/models", "snippet": "Claude API models provide multimodal reasoning and tool use capabilities."}
+    ],
+    "Claude API official API pricing input output tokens": [
+      {"title": "Claude API Pricing", "url": "https://docs.anthropic.com/en/docs/about-claude/pricing", "snippet": "Claude API pricing lists Claude Sonnet input tokens and output tokens.", "raw_content": "Claude Sonnet input tokens cost $3 per 1M input tokens."}
+    ],
+    "Claude API official API documentation SDK tools": [
+      {"title": "Claude API Documentation", "url": "https://docs.anthropic.com/en/api/client-sdks", "snippet": "Claude API documentation provides Python and TypeScript SDK tools."}
+    ],
+    "Claude API official context window rate limits": [
+      {"title": "Claude API Rate Limits", "url": "https://docs.anthropic.com/en/api/rate-limits", "snippet": "Claude API usage limits document rate limits, quotas, and context window constraints."}
+    ],
+    "Gemini API official models multimodal capabilities": [
+      {"title": "Gemini API Models", "url": "https://ai.google.dev/gemini-api/docs/models", "snippet": "Gemini API models provide multimodal reasoning and tool use capabilities."}
+    ],
+    "Gemini API official API pricing input output tokens": [
+      {"title": "Gemini API Pricing", "url": "https://ai.google.dev/gemini-api/docs/pricing", "snippet": "Gemini API pricing lists Gemini input tokens and output tokens.", "raw_content": "Gemini API input tokens cost $1.25 per 1M input tokens."}
+    ],
+    "Gemini API official API documentation SDK tools": [
+      {"title": "Gemini API Documentation", "url": "https://ai.google.dev/gemini-api/docs", "snippet": "Gemini API documentation provides SDK guides and function calling tools."}
+    ],
+    "Gemini API official context window rate limits": [
+      {"title": "Gemini API Rate Limits", "url": "https://ai.google.dev/gemini-api/docs/rate-limits", "snippet": "Gemini API usage limits document rate limits, quotas, and context window sizes."}
+    ]
+  },
+  "extractor_outputs": [
+    {
+      "profile": {
+        "product_name": "OpenAI API",
+        "features": [{"name": "Multimodal reasoning", "description": "Models support text, image, reasoning, and tool use.", "evidence_ids": ["E1"]}],
+        "dimension_findings": [
+          {"dimension": "developer_platform", "facts": ["Provides SDK guides and function calling tools."], "evidence_ids": ["E4"]},
+          {"dimension": "usage_limits", "facts": ["Documents context windows and rate-limit tiers."], "evidence_ids": ["E5"]}
+        ],
+        "pricing": [{"plan_name": "GPT-5 input tokens", "price": "$1.25 per 1M input tokens", "unit": "per 1M input tokens", "main_limits": [], "evidence_ids": ["E2"]}]
+      }
+    },
+    {
+      "profile": {
+        "product_name": "Claude API",
+        "features": [{"name": "Multimodal reasoning", "description": "Models support multimodal reasoning and tool use.", "evidence_ids": ["E6"]}],
+        "dimension_findings": [
+          {"dimension": "developer_platform", "facts": ["Provides Python and TypeScript SDK tools."], "evidence_ids": ["E8"]},
+          {"dimension": "usage_limits", "facts": ["Documents rate limits, quotas, and context-window constraints."], "evidence_ids": ["E9"]}
+        ],
+        "pricing": [{"plan_name": "Claude Sonnet input tokens", "price": "$3 per 1M input tokens", "unit": "per 1M input tokens", "main_limits": [], "evidence_ids": ["E7"]}]
+      }
+    },
+    {
+      "profile": {
+        "product_name": "Gemini API",
+        "features": [{"name": "Multimodal reasoning", "description": "Models support multimodal reasoning and tool use.", "evidence_ids": ["E10"]}],
+        "dimension_findings": [
+          {"dimension": "developer_platform", "facts": ["Provides SDK guides and function calling tools."], "evidence_ids": ["E12"]},
+          {"dimension": "usage_limits", "facts": ["Documents rate limits, quotas, and context-window sizes."], "evidence_ids": ["E13"]}
+        ],
+        "pricing": [{"plan_name": "Gemini input tokens", "price": "$1.25 per 1M input tokens", "unit": "per 1M input tokens", "main_limits": [], "evidence_ids": ["E11"]}]
+      }
+    }
+  ]
+}

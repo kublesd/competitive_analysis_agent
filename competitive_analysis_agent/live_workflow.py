@@ -15,6 +15,7 @@ from competitive_analysis_agent.live_extractor import create_live_extractor
 from competitive_analysis_agent.live_planner import create_live_planner
 from competitive_analysis_agent.live_verifier import create_live_verifier
 from competitive_analysis_agent.planner import PlannerInput
+from competitive_analysis_agent.schemas import MarketDefinition
 from competitive_analysis_agent.reporter import Reporter
 from competitive_analysis_agent.researcher import Researcher
 from competitive_analysis_agent.search import (
@@ -101,13 +102,21 @@ def run_smoke_test(
     current_settings = settings or load_live_settings()
     components = create_live_workflow_components(current_settings)
     graph = create_workflow_graph(components)
+    market_definition = MarketDefinition(
+        market_name="团队知识管理工具",
+        product_category="SaaS 协作软件",
+        target_buyer="中型企业 IT 与业务负责人",
+        comparison_level="企业订阅产品",
+        core_dimensions=["features"],
+    )
     planner_input = PlannerInput(
         target_product="Atlas Notes",
         competitors=["Beacon Docs"],
-        dimensions=["features"],
+        market_definition=market_definition,
     )
     initial_state = create_initial_state(
         planner_input=planner_input,
+        market_definition=market_definition,
         official_domains_by_product={
             "Atlas Notes": ["example.com"],
             "Beacon Docs": ["example.com"],

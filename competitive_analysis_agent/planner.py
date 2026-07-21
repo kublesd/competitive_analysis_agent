@@ -15,6 +15,7 @@ from competitive_analysis_agent.model_io import (
 )
 from competitive_analysis_agent.schemas import (
     ContractModel,
+    MarketDefinition,
     ResearchTask,
     RequiredText,
 )
@@ -23,28 +24,29 @@ from competitive_analysis_agent.schemas import (
 PLANNER_SYSTEM_PROMPT = """
 你是竞品分析流程中的 Planner。
 
-你的唯一职责是把产品和分析维度拆成搜索任务，不要搜索网页，也不要回答产品事实。
+你的唯一职责是按照市场定义把产品和分析维度拆成搜索任务，不要搜索网页，也不要回答产品事实。
 
 要求：
 1. 目标产品和每个竞品都必须覆盖全部分析维度。
 2. 每条任务只包含一个产品和一个 topic。
 3. topic 必须直接使用输入中的分析维度。
-4. query 应包含产品名称、topic 和 official，便于后续搜索官方资料。
-5. 不得添加输入中不存在的产品或分析维度。
-6. product_name 和 topic 必须逐字复制输入中的值，不得翻译或改写。
-7. 任务数量必须等于产品数量乘以分析维度数量。
-8. 只输出 JSON 对象，不要添加 Markdown 或解释。
-9. JSON 格式必须是：
+4. query 必须逐字包含产品名称、产品类别、比较层级、topic 和 official。
+5. 每个排除项也必须以 `exclude 排除项` 的形式逐字写入 query。
+6. 不得为排除项创建任务，不得添加输入中不存在的产品或分析维度。
+7. product_name 和 topic 必须逐字复制输入中的值，不得翻译或改写。
+8. 任务数量必须等于产品数量乘以分析维度数量。
+9. 只输出 JSON 对象，不要添加 Markdown 或解释。
+10. JSON 格式必须是：
    {"tasks": [{"product_name": "...", "topic": "...", "query": "..."}]}
 """.strip()
 
 
 class PlannerInput(ContractModel):
-    """保存 Planner 的用户输入，并拒绝重复产品或维度。"""
+    """保存 Planner 的产品列表与已校验市场定义。"""
 
     target_product: RequiredText
     competitors: list[RequiredText] = Field(min_length=1)
-    dimensions: list[RequiredText] = Field(min_length=1)
+    market_definition: MarketDefinition
 
     @model_validator(mode="after")
     def validate_unique_values(self) -> "PlannerInput":
@@ -54,9 +56,6 @@ class PlannerInput(ContractModel):
         if len(products) != len(set(products)):
             raise ValueError("Target product and competitors must be unique.")
 
-        if len(self.dimensions) != len(set(self.dimensions)):
-            raise ValueError("Dimensions must be unique.")
-
         return self
 
     @property
@@ -64,6 +63,12 @@ class PlannerInput(ContractModel):
         """按目标产品优先的顺序返回全部待调研产品。"""
 
         return [self.target_product, *self.competitors]
+
+    @property
+    def dimensions(self) -> list[str]:
+        """返回市场定义中的核心维度，避免 Planner 保存第二份范围数据。"""
+
+        return self.market_definition.core_dimensions
 
 
 class PlannerOutput(ContractModel):
@@ -170,49 +175,16 @@ class PlannerValidationError(ValueError):
 
 
 class Planner:
-    """生成、校验并在必要时修复一次调研任务计划。"""
+    """根据已校验输入确定性生成产品与维度的调研任务矩阵。"""
 
-    def __init__(self, model: PlannerModel) -> None:
+    def __init__(self, model: PlannerModel | None = None) -> None:
+        # 保留可选参数兼容旧的组装代码；确定性 Planner 不再调用模型。
         self._model = model
 
     def plan(self, planner_input: PlannerInput) -> list[ResearchTask]:
-        """生成任务列表；首次校验失败时最多请求一次修复。"""
+        """按产品优先、维度次序生成稳定且完整的任务矩阵。"""
 
-        initial_messages = build_planner_messages(planner_input)
-        raw_output = self._invoke_model(
-            messages=initial_messages,
-            planner_input=planner_input,
-        )
-
-        try:
-            validated_output = validate_planner_output(
-                raw_output,
-                planner_input,
-            )
-            return validated_output.tasks
-        except PlannerValidationError as first_error:
-            # 只修复一次，避免错误输出导致无限调用和不可控成本。
-            repair_messages = build_repair_messages(
-                initial_messages=initial_messages,
-                raw_output=raw_output,
-                validation_error=str(first_error),
-            )
-            repaired_output = self._invoke_model(
-                messages=repair_messages,
-                planner_input=planner_input,
-            )
-
-        try:
-            validated_repair = validate_planner_output(
-                repaired_output,
-                planner_input,
-            )
-            return validated_repair.tasks
-        except PlannerValidationError as second_error:
-            raise PlannerError(
-                "Planner output remained invalid after one repair: "
-                f"{second_error}"
-            ) from second_error
+        return build_deterministic_tasks(planner_input)
 
     def _invoke_model(
         self,
@@ -232,6 +204,36 @@ class Planner:
                 f"Planner model call failed: {error}",
                 public_detail=public_detail,
             ) from error
+
+
+def build_deterministic_tasks(
+    planner_input: PlannerInput,
+) -> list[ResearchTask]:
+    """把市场定义直接展开为可审计的产品 × 核心维度搜索任务。"""
+
+    tasks: list[ResearchTask] = []
+    market_definition = planner_input.market_definition
+    for product_name in planner_input.products:
+        for dimension in planner_input.dimensions:
+            query_parts = [
+                product_name,
+                market_definition.product_category,
+                market_definition.comparison_level,
+                dimension,
+                "official",
+            ]
+            query_parts.extend(
+                f"exclude {exclusion}"
+                for exclusion in market_definition.exclusions
+            )
+            tasks.append(
+                ResearchTask(
+                    product_name=product_name,
+                    topic=dimension,
+                    query=" ".join(query_parts),
+                )
+            )
+    return tasks
 
 
 def build_model_call_failure_detail(
@@ -331,7 +333,40 @@ def validate_planner_output(
         ) from error
 
     validate_task_coverage(planner_output.tasks, planner_input)
+    validate_task_query_scope(planner_output.tasks, planner_input)
     return planner_output
+
+
+def validate_task_query_scope(
+    tasks: Sequence[ResearchTask],
+    planner_input: PlannerInput,
+) -> None:
+    """确保每条查询保留产品、市场层级、官方来源和排除范围。"""
+
+    market_definition = planner_input.market_definition
+    for task in tasks:
+        required_parts = [
+            task.product_name,
+            market_definition.product_category,
+            market_definition.comparison_level,
+            task.topic,
+            "official",
+        ]
+        for exclusion in market_definition.exclusions:
+            required_parts.append(f"exclude {exclusion}")
+
+        normalized_query = task.query.casefold()
+        missing_parts: list[str] = []
+        for required_part in required_parts:
+            if required_part.casefold() not in normalized_query:
+                missing_parts.append(required_part)
+
+        if missing_parts:
+            missing_text = ", ".join(missing_parts)
+            raise PlannerValidationError(
+                "Task query is missing market scope: "
+                f"{task.product_name}/{task.topic}; missing={missing_text}"
+            )
 
 
 def validate_task_coverage(

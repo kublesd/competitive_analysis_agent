@@ -8,17 +8,30 @@ from pydantic import ValidationError
 from competitive_analysis_agent.analyst import (
     ANALYST_SYSTEM_PROMPT,
     Analyst,
-    AnalystError,
     AnalystInput,
     AnalystOutput,
     FakeAnalystModel,
     LangChainAnalystModel,
     build_analyst_messages,
     collect_analysis_claims,
+    build_fallback_pricing_claims,
     contains_pricing_language,
     format_fallback_pricing_claim,
 )
-from competitive_analysis_agent.schemas import ProductProfile, WorkflowState
+from competitive_analysis_agent.schemas import (
+    Currency,
+    DimensionFinding,
+    MarketDefinition,
+    ModelPricing,
+    ModelProfile,
+    PriceRate,
+    PricingUnit,
+    ProductProfile,
+    SourceReference,
+    SourceType,
+    SupportStatus,
+    WorkflowState,
+)
 
 
 FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
@@ -37,6 +50,19 @@ def _load_sample_profiles() -> list[ProductProfile]:
     sample_case = _load_json("sample_case.json")
     workflow_state = WorkflowState.model_validate(sample_case)
     return workflow_state.product_profiles
+
+
+def _build_market_definition() -> MarketDefinition:
+    """创建 Analyst 范围与目标购买者测试使用的固定市场。"""
+
+    return MarketDefinition(
+        market_name="Team knowledge workspace",
+        product_category="SaaS collaboration software",
+        target_buyer="Mid-sized company IT and business leaders",
+        comparison_level="Team subscription product",
+        core_dimensions=["features", "pricing"],
+        exclusions=["consumer plans", "API usage pricing"],
+    )
 
 
 class FakeChatModel:
@@ -62,6 +88,56 @@ class FakeChatModel:
 
 
 class AnalystTest(unittest.TestCase):
+    def test_model_input_and_output_prices_keep_complete_semantics(self) -> None:
+        # 同一模型的价格方向必须留在 claim 中，不能退化成两个同名套餐数字。
+        source = SourceReference(
+            evidence_id="E1",
+            title="Claude pricing",
+            url="https://docs.anthropic.com/pricing",
+            source_type=SourceType.OFFICIAL,
+            collected_at="2026-07-20T00:00:00Z",
+        )
+        profile = ProductProfile(
+            product_name="Claude API",
+            models=[
+                ModelProfile(
+                    model_name="Claude Sonnet 5",
+                    pricing=ModelPricing(
+                        input_price=PriceRate(
+                            amount="2",
+                            currency=Currency.USD,
+                            per_quantity=1_000_000,
+                            unit=PricingUnit.TOKEN,
+                            evidence_ids=["E1"],
+                        ),
+                        output_price=PriceRate(
+                            amount="10",
+                            currency=Currency.USD,
+                            per_quantity=1_000_000,
+                            unit=PricingUnit.TOKEN,
+                            evidence_ids=["E1"],
+                        ),
+                    ),
+                    batch_api=SupportStatus.MISSING,
+                    source_evidence=[source],
+                    extraction_confidence=0.98,
+                )
+            ],
+        )
+
+        claims = [
+            item.claim for item in build_fallback_pricing_claims([profile])
+        ]
+
+        self.assertEqual(
+            claims,
+            [
+                "Claude Sonnet 5 input price is $2 per million tokens.",
+                "Claude Sonnet 5 output price is $10 per million tokens.",
+            ],
+        )
+        self.assertFalse(any("plan is" in claim for claim in claims))
+
     def test_valid_output_compares_all_products_with_citations(self) -> None:
         # 固定输出应覆盖两个产品，并让所有事实保留 Evidence ID。
         fixture = _load_json("analyst_outputs.json")
@@ -156,6 +232,56 @@ class AnalystTest(unittest.TestCase):
         self.assertEqual(len(analysis.products), 2)
         self.assertEqual(model.invocation_count, 2)
 
+    def test_unreferenced_facts_do_not_discard_valid_analysis(self) -> None:
+        # 个别无引用事实应被移除，其余横向判断不应整体退回 fallback。
+        fixture = _load_json("analyst_outputs.json")
+        raw_output = deepcopy(fixture["valid"])
+        raw_output["analysis"]["dimension_comparisons"] = [
+            {
+                "claim": (
+                    "Atlas Notes documents templates while Beacon Docs "
+                    "documents collaborative pages."
+                ),
+                "claim_type": "interpretation",
+                "product_names": ["Atlas Notes", "Beacon Docs"],
+                "evidence_ids": ["E1", "E3"],
+            }
+        ]
+        raw_output["analysis"]["pricing"].extend(
+            [
+                {
+                    "claim": "Atlas Notes has no public price fact.",
+                    "claim_type": "fact",
+                    "product_names": ["Atlas Notes"],
+                    "evidence_ids": [],
+                },
+                {
+                    "claim": "Beacon Docs has no public price fact.",
+                    "claim_type": "fact",
+                    "product_names": ["Beacon Docs"],
+                    "evidence_ids": [],
+                },
+            ]
+        )
+        model = FakeAnalystModel(
+            [json.dumps(raw_output, ensure_ascii=False)]
+        )
+
+        analysis = Analyst(model).analyze(
+            AnalystInput(profiles=_load_sample_profiles())
+        )
+
+        self.assertEqual(model.invocation_count, 1)
+        self.assertEqual(len(analysis.dimension_comparisons), 1)
+        self.assertIn(
+            "documents templates",
+            analysis.dimension_comparisons[0].claim,
+        )
+        self.assertNotIn(
+            "no public price fact",
+            " ".join(claim.claim for claim in analysis.pricing),
+        )
+
     def test_missing_product_is_repaired_once(self) -> None:
         # 产品只出现在 products 标题中还不够，必须进入实际比较 claim。
         fixture = _load_json("analyst_outputs.json")
@@ -198,8 +324,8 @@ class AnalystTest(unittest.TestCase):
             repair_message,
         )
 
-    def test_pricing_claim_inside_features_is_repaired_once(self) -> None:
-        # 最新真实报告曾把价格事实放进功能对比，这里固定成回归测试。
+    def test_pricing_claim_inside_features_is_removed_locally(self) -> None:
+        # 误放的价格事实可安全删除时，不应让整份有效分析进入修复。
         fixture = _load_json("analyst_outputs.json")
         pricing_inside_features = deepcopy(fixture["valid"])
         pricing_inside_features["analysis"]["features"].append(
@@ -223,11 +349,12 @@ class AnalystTest(unittest.TestCase):
         )
 
         self.assertEqual(len(analysis.products), 2)
-        self.assertEqual(model.invocation_count, 2)
-        repair_message = model.received_messages[1][-1]["content"]
-        self.assertIn(
-            "Feature section contains pricing claims: features[3]",
-            repair_message,
+        self.assertEqual(model.invocation_count, 1)
+        self.assertFalse(
+            any(
+                "Standard plan priced" in claim.claim
+                for claim in analysis.features
+            )
         )
 
     def test_pricing_language_detector_avoids_enterprise_search(self) -> None:
@@ -767,6 +894,126 @@ class AnalystTest(unittest.TestCase):
         self.assertIn("上一次分析未通过 Verifier", messages[1]["content"])
         self.assertIn("pricing[0]", messages[1]["content"])
 
+    def test_market_definition_is_added_to_user_message(self) -> None:
+        # Analyst 必须看到目标购买者、比较层级、核心维度和排除项。
+        analyst_input = AnalystInput(
+            profiles=_load_sample_profiles(),
+            market_definition=_build_market_definition(),
+        )
+
+        messages = build_analyst_messages(analyst_input)
+        user_message = messages[1]["content"]
+
+        self.assertIn("Mid-sized company IT", user_message)
+        self.assertIn("Team subscription product", user_message)
+        self.assertIn('"features"', user_message)
+        self.assertIn("API usage pricing", user_message)
+
+    def test_recommendation_references_are_repaired_once(self) -> None:
+        # 建议也必须遵守产品到 Evidence ID 的归属关系。
+        fixture = _load_json("analyst_outputs.json")
+        invalid_output = deepcopy(fixture["valid"])
+        invalid_output["analysis"]["recommendations"][0][
+            "evidence_ids"
+        ] = ["E99"]
+        model = FakeAnalystModel([invalid_output, fixture["valid"]])
+        analyst = Analyst(model)
+
+        analysis = analyst.analyze(
+            AnalystInput(
+                profiles=_load_sample_profiles(),
+                market_definition=_build_market_definition(),
+            )
+        )
+
+        self.assertEqual(model.invocation_count, 2)
+        self.assertTrue(analysis.recommendations)
+        self.assertNotIn("E99", analysis.recommendations[0].evidence_ids)
+
+    def test_fallback_recommendation_has_action_evidence_and_boundary(
+        self,
+    ) -> None:
+        # 两次无效模型输出后，保守 fallback 仍应给出可追溯的购买者建议。
+        analyst = Analyst(FakeAnalystModel([{"bad": 1}, {"bad": 1}]))
+
+        analysis = analyst.analyze(
+            AnalystInput(
+                profiles=_load_sample_profiles(),
+                market_definition=_build_market_definition(),
+            )
+        )
+
+        self.assertTrue(analysis.recommendations)
+        recommendation = analysis.recommendations[0]
+        self.assertEqual(
+            recommendation.target_scenario,
+            "Mid-sized company IT and business leaders",
+        )
+        self.assertTrue(recommendation.recommended_action)
+        self.assertTrue(recommendation.evidence_ids)
+        self.assertIn("资料不足", recommendation.limitations[0])
+
+    def test_unselected_pricing_dimension_is_removed_by_fallback(self) -> None:
+        # 用户只选功能时，模型写出的 pricing 比较不能进入最终结果。
+        fixture = _load_json("analyst_outputs.json")
+        analyst = Analyst(
+            FakeAnalystModel([fixture["valid"], fixture["valid"]])
+        )
+        market = _build_market_definition().model_copy(
+            update={"core_dimensions": ["features"]}
+        )
+
+        analysis = analyst.analyze(
+            AnalystInput(
+                profiles=_load_sample_profiles(),
+                market_definition=market,
+            )
+        )
+
+        self.assertEqual(analysis.pricing, [])
+        self.assertTrue(analysis.features)
+
+    def test_custom_dimension_findings_become_grounded_comparisons(
+        self,
+    ) -> None:
+        # 自定义维度不能丢失；无资料的产品保持空白并在建议中披露边界。
+        profiles = _load_sample_profiles()
+        profiles[0] = profiles[0].model_copy(
+            update={
+                "dimension_findings": [
+                    DimensionFinding(
+                        dimension="governance",
+                        facts=["Workspace roles are documented."],
+                        evidence_ids=["E1"],
+                    )
+                ]
+            }
+        )
+        profiles[1] = profiles[1].model_copy(
+            update={
+                "dimension_findings": [
+                    DimensionFinding(dimension="governance")
+                ]
+            }
+        )
+        market = _build_market_definition().model_copy(
+            update={"core_dimensions": ["governance"]}
+        )
+        analyst = Analyst(FakeAnalystModel([{"bad": 1}, {"bad": 1}]))
+
+        analysis = analyst.analyze(
+            AnalystInput(profiles=profiles, market_definition=market)
+        )
+
+        self.assertEqual(len(analysis.dimension_comparisons), 1)
+        self.assertIn(
+            "Workspace roles are documented",
+            analysis.dimension_comparisons[0].claim,
+        )
+        self.assertEqual(analysis.dimension_comparisons[0].evidence_ids, ["E1"])
+        self.assertTrue(analysis.recommendations)
+        self.assertIn("资料不足", analysis.recommendations[0].limitations[0])
+
     def test_prompt_keeps_fact_claims_close_to_profile_text(self) -> None:
         # 真实模型应避免把短功能标签扩写成证据没有支持的大 claim。
         self.assertIn("贴近 ProductProfile", ANALYST_SYSTEM_PROMPT)
@@ -776,6 +1023,89 @@ class AnalystTest(unittest.TestCase):
         self.assertIn("不要因为证据简短就全部留空", ANALYST_SYSTEM_PROMPT)
         self.assertIn("更需要可读分析", ANALYST_SYSTEM_PROMPT)
         self.assertIn("显著减少", ANALYST_SYSTEM_PROMPT)
+        self.assertIn("recommendations 与事实", ANALYST_SYSTEM_PROMPT)
+        self.assertIn("不得把不同产品层级", ANALYST_SYSTEM_PROMPT)
+
+    def test_unified_fields_generate_safe_scenario_analysis(self) -> None:
+        source_one = SourceReference(
+            evidence_id="E1",
+            title="One model docs",
+            url="https://example.com/one",
+            source_type=SourceType.OFFICIAL,
+            collected_at="2026-07-20T00:00:00Z",
+        )
+        source_two = source_one.model_copy(
+            update={"evidence_id": "E2", "title": "Two model docs"}
+        )
+        profiles = [
+            ProductProfile(
+                product_name="One API",
+                models=[
+                    ModelProfile(
+                        model_name="One",
+                        model_capabilities=["coding"],
+                        supported_modalities=["text", "image"],
+                        context_window_tokens=200_000,
+                        tool_calling=SupportStatus.SUPPORTED,
+                        batch_api=SupportStatus.SUPPORTED,
+                        pricing=ModelPricing(
+                            input_price=PriceRate(
+                                amount="2", currency="USD", per_quantity=1_000_000,
+                                unit="token", evidence_ids=["E1"],
+                            ),
+                            output_price=PriceRate(
+                                amount="8", currency="USD", per_quantity=1_000_000,
+                                unit="token", evidence_ids=["E1"],
+                            ),
+                        ),
+                        source_evidence=[source_one],
+                        extraction_confidence=1,
+                    )
+                ],
+            ),
+            ProductProfile(
+                product_name="Two API",
+                models=[
+                    ModelProfile(
+                        model_name="Two",
+                        source_evidence=[source_two],
+                        extraction_confidence=1,
+                    )
+                ],
+            ),
+        ]
+
+        analysis = Analyst(FakeAnalystModel([])).analyze(
+            AnalystInput(profiles=profiles)
+        )
+
+        self.assertEqual(
+            {item.scenario for item in analysis.scenario_recommendations},
+            {
+                "编程 Agent", "RAG 与知识库问答", "长文档分析", "实时语音应用",
+                "多模态理解", "低成本批处理", "企业级 API 集成",
+            },
+        )
+        coding = next(
+            item for item in analysis.scenario_recommendations
+            if item.scenario == "编程 Agent"
+        )
+        voice = next(
+            item for item in analysis.scenario_recommendations
+            if item.scenario == "实时语音应用"
+        )
+        self.assertEqual(coding.recommended_product, "One API")
+        self.assertEqual(voice.recommended_product, "暂无可验证推荐")
+        self.assertFalse(any(
+            "不支持" in gap
+            for assessment in analysis.product_assessments
+            for gap in assessment.data_gaps
+        ))
+        self.assertEqual(len(analysis.market_opportunities), 3)
+        self.assertTrue(all(
+            item.user_pain and item.product_direction
+            for item in analysis.market_opportunities
+        ))
 
 
 if __name__ == "__main__":

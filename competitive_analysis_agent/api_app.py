@@ -15,7 +15,11 @@ from competitive_analysis_agent import ui_service
 from competitive_analysis_agent.health import build_health_report
 from competitive_analysis_agent.logging_config import configure_application_logging
 from competitive_analysis_agent.researcher import ResearchError
-from competitive_analysis_agent.schemas import ContractModel, RequiredText
+from competitive_analysis_agent.schemas import (
+    ContractModel,
+    MarketDefinition,
+    RequiredText,
+)
 from competitive_analysis_agent.verifier import VerificationIssue
 
 
@@ -36,7 +40,7 @@ class ApiAnalysisRequest(ContractModel):
 
     target_product: RequiredText
     competitors: list[RequiredText] = Field(min_length=1)
-    dimensions: list[RequiredText] = Field(min_length=1)
+    market_definition: MarketDefinition
     official_domains_by_product: dict[str, list[RequiredText]] = Field(
         default_factory=dict
     )
@@ -47,7 +51,7 @@ class ApiAnalysisRequest(ContractModel):
         return ui_service.AnalysisRequest(
             target_product=self.target_product,
             competitors=self.competitors,
-            dimensions=self.dimensions,
+            market_definition=self.market_definition,
             official_domains_by_product=self.official_domains_by_product,
         )
 
@@ -62,6 +66,8 @@ class ApiEvidenceResponse(ContractModel):
     url: RequiredText
     snippet_preview: RequiredText
     source_type: Literal["official", "third_party"]
+    scope_status: Literal["in_scope", "out_of_scope", "uncertain"]
+    scope_reason: RequiredText
     collected_at: datetime
 
 
@@ -69,8 +75,13 @@ class ApiAnalysisResponse(ContractModel):
     """保存一次 API 分析完成后的报告、轨迹和可复核来源。"""
 
     final_report: RequiredText
+    market_definition: MarketDefinition
     stage_history: list[RequiredText] = Field(min_length=1)
     verification_passed: bool
+    citations_valid: bool
+    scope_consistent: bool
+    comparison_usable: bool
+    evidence_scope_counts: ui_service.EvidenceScopeCounts
     verification_issues: list[VerificationIssue] = Field(default_factory=list)
     evidence: list[ApiEvidenceResponse] = Field(default_factory=list)
     research_errors: list[ResearchError] = Field(default_factory=list)
@@ -95,14 +106,21 @@ class ApiAnalysisResponse(ContractModel):
                         evidence.snippet
                     ),
                     source_type=evidence.source_type,
+                    scope_status=evidence.scope_status,
+                    scope_reason=evidence.scope_reason,
                     collected_at=evidence.collected_at,
                 )
             )
 
         return cls(
             final_report=result.final_report,
+            market_definition=result.market_definition,
             stage_history=result.stage_history,
             verification_passed=result.verification_result.passed,
+            citations_valid=result.verification_result.citations_valid,
+            scope_consistent=result.verification_result.scope_consistent,
+            comparison_usable=result.verification_result.comparison_usable,
+            evidence_scope_counts=result.evidence_scope_counts,
             verification_issues=result.verification_result.issues,
             evidence=evidence_responses,
             research_errors=result.research_errors,

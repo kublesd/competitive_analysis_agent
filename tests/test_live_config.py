@@ -6,6 +6,7 @@ from competitive_analysis_agent.live_config import (
     LIVE_ENV_FILE,
     PROJECT_ROOT,
     build_provider_request_options,
+    should_disable_siliconflow_qwen3_thinking,
 )
 from competitive_analysis_agent.config import Settings
 
@@ -45,3 +46,19 @@ def test_non_gemini_endpoint_does_not_receive_provider_options() -> None:
     )
 
     assert build_provider_request_options(settings) == {}
+
+
+def test_siliconflow_qwen3_disables_thinking() -> None:
+    """SiliconFlow Qwen3 应关闭默认思考，避免结构化节点超时。"""
+
+    settings = Settings(
+        llm_api_key="test-key",
+        llm_base_url="https://api.siliconflow.cn/v1",
+        llm_model="Qwen/Qwen3-8B",
+        tavily_api_key=None,
+    )
+
+    assert should_disable_siliconflow_qwen3_thinking(settings)
+    assert build_provider_request_options(settings) == {
+        "extra_body": {"enable_thinking": False}
+    }

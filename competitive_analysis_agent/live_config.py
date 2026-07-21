@@ -57,10 +57,26 @@ def build_provider_request_options(settings: Settings) -> dict[str, object]:
     """返回 OpenAI 兼容模型的供应商专用请求选项。"""
 
     request_options: dict[str, object] = {}
+    if should_disable_siliconflow_qwen3_thinking(settings):
+        # Qwen3 默认会先生成思考 token；结构化节点不需要这个开销。
+        request_options["extra_body"] = {"enable_thinking": False}
     if should_disable_gemini_flash_thinking(settings):
         request_options["reasoning_effort"] = "none"
 
     return request_options
+
+
+def should_disable_siliconflow_qwen3_thinking(settings: Settings) -> bool:
+    """判断当前配置是否为 SiliconFlow 的 Qwen3 文本模型。"""
+
+    base_url = settings.llm_base_url or ""
+    model_name = settings.llm_model or ""
+    hostname = urlparse(base_url).hostname or ""
+
+    return (
+        hostname.endswith("siliconflow.cn")
+        and model_name.startswith("Qwen/Qwen3-")
+    )
 
 
 def should_disable_gemini_flash_thinking(settings: Settings) -> bool:

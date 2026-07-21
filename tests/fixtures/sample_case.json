@@ -3,10 +3,19 @@
   "competitors": [
     "Beacon Docs"
   ],
-  "dimensions": [
-    "features",
-    "pricing"
-  ],
+  "market_definition": {
+    "market_name": "团队知识管理工具",
+    "product_category": "SaaS 协作软件",
+    "target_buyer": "中型企业 IT 与业务负责人",
+    "comparison_level": "企业订阅产品",
+    "core_dimensions": [
+      "features",
+      "pricing"
+    ],
+    "exclusions": [
+      "消费端套餐"
+    ]
+  },
   "research_tasks": [
     {
       "product_name": "Atlas Notes",
@@ -87,6 +96,18 @@
           ]
         }
       ],
+      "dimension_findings": [
+        {
+          "dimension": "features",
+          "facts": ["Reusable templates"],
+          "evidence_ids": ["E1"]
+        },
+        {
+          "dimension": "pricing",
+          "facts": ["Team：12 USD per user / monthly"],
+          "evidence_ids": ["E2"]
+        }
+      ],
       "pricing": [
         {
           "plan_name": "Team",
@@ -114,6 +135,18 @@
           "evidence_ids": [
             "E3"
           ]
+        }
+      ],
+      "dimension_findings": [
+        {
+          "dimension": "features",
+          "facts": ["Collaborative pages"],
+          "evidence_ids": ["E3"]
+        },
+        {
+          "dimension": "pricing",
+          "facts": ["Business：价格未提供 / 计费周期未提供"],
+          "evidence_ids": ["E4"]
         }
       ],
       "pricing": [

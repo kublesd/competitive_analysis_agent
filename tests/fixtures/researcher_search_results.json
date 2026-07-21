@@ -1,5 +1,5 @@
 {
-  "Atlas Notes official product features capabilities": [
+  "Atlas Notes official features": [
     {
       "title": "Atlas Notes Overview",
       "url": "https://example.com/atlas/overview",
@@ -11,7 +11,7 @@
       "snippet": "Feature documentation for collaborative notes and permissions."
     }
   ],
-  "Atlas Notes official pricing plans price Free Plus Standard Business Enterprise": [
+  "Atlas Notes official pricing": [
     {
       "title": "Atlas Notes Overview Duplicate",
       "url": "https://example.com/atlas/overview?utm_source=pricing",
@@ -23,7 +23,7 @@
       "snippet": "Pricing plans for individuals and teams."
     }
   ],
-  "Beacon Docs official product features capabilities": [
+  "Beacon Docs official features": [
     {
       "title": "Beacon Docs Features",
       "url": "https://example.com/beacon/features",

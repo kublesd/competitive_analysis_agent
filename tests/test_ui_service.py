@@ -14,6 +14,7 @@ from competitive_analysis_agent.search import (
     FakeSearchProvider,
     SearchAdapter,
 )
+from competitive_analysis_agent.schemas import MarketDefinition
 from competitive_analysis_agent.ui_service import (
     AnalysisRequest,
     build_analysis_dimensions,
@@ -35,6 +36,21 @@ from competitive_analysis_agent.workflow import WorkflowComponents
 
 
 FIXED_TIME = datetime(2026, 6, 14, 8, 0, tzinfo=timezone.utc)
+
+
+def _build_market_definition(
+    dimensions: list[str] | None = None,
+) -> MarketDefinition:
+    """创建入口与 State 测试共用的固定市场定义。"""
+
+    return MarketDefinition(
+        market_name="团队知识管理工具",
+        product_category="SaaS 协作软件",
+        target_buyer="中型企业 IT 与业务负责人",
+        comparison_level="企业订阅产品",
+        core_dimensions=dimensions or ["features"],
+        exclusions=["消费端套餐"],
+    )
 
 
 class RecordingHook:
@@ -124,17 +140,23 @@ def _build_demo_components() -> WorkflowComponents:
             {
                 "product_name": "Atlas Notes",
                 "topic": "features",
-                "query": "Atlas Notes official features",
+                "query": (
+                    "Atlas Notes SaaS 协作软件 企业订阅产品 features "
+                    "official exclude 消费端套餐"
+                ),
             },
             {
                 "product_name": "Beacon Docs",
                 "topic": "features",
-                "query": "Beacon Docs official features",
+                "query": (
+                    "Beacon Docs SaaS 协作软件 企业订阅产品 features "
+                    "official exclude 消费端套餐"
+                ),
             },
         ]
     }
     search_results = {
-        "Atlas Notes official product features capabilities": [
+        "Atlas Notes official product features collaboration": [
             {
                 "title": "Atlas Notes Features",
                 "url": "https://example.com/atlas/features",
@@ -144,7 +166,7 @@ def _build_demo_components() -> WorkflowComponents:
                 ),
             }
         ],
-        "Beacon Docs official product features capabilities": [
+        "Beacon Docs official product features collaboration": [
             {
                 "title": "Beacon Docs Features",
                 "url": "https://example.com/beacon/features",
@@ -304,8 +326,32 @@ class UiServiceTest(unittest.TestCase):
             create_analysis_request(
                 target_product="Atlas Notes",
                 competitors_text="Beacon Docs",
+                market_name="团队知识管理工具",
+                product_category="SaaS 协作软件",
+                target_buyer="",
+                comparison_level="企业订阅产品",
                 dimensions=[],
             )
+
+    def test_market_definition_is_preserved_from_ui_input(self) -> None:
+        # UI 原始字段应组合成与 API 相同的 MarketDefinition 契约。
+        request = create_analysis_request(
+            target_product="Atlas Notes",
+            competitors_text="Beacon Docs",
+            market_name="团队知识管理工具",
+            product_category="SaaS 协作软件",
+            target_buyer="中型企业 IT 与业务负责人",
+            comparison_level="企业订阅产品",
+            dimensions=["features", "pricing"],
+            exclusions_text="消费端套餐，API 用量价格",
+        )
+
+        self.assertEqual(
+            request.market_definition,
+            _build_market_definition(["features", "pricing"]).model_copy(
+                update={"exclusions": ["消费端套餐", "API 用量价格"]}
+            ),
+        )
 
     def test_official_domains_are_parsed_for_known_products(self) -> None:
         # 用户显式域名会进入 State，供搜索限定和官方来源分类使用。
@@ -333,7 +379,7 @@ class UiServiceTest(unittest.TestCase):
         request = AnalysisRequest(
             target_product="Atlas Notes",
             competitors=["Beacon Docs"],
-            dimensions=["features"],
+            market_definition=_build_market_definition(),
             official_domains_by_product={
                 "Atlas Notes": ["example.com"],
                 "Beacon Docs": ["example.com"],
@@ -372,6 +418,8 @@ class UiServiceTest(unittest.TestCase):
         log_text = "\n".join(captured_logs.output)
         self.assertIn("analysis_started analysis_id=", log_text)
         self.assertIn("analysis_completed analysis_id=", log_text)
+        self.assertIn("in_scope_count=2", log_text)
+        self.assertIn("scope_consistent=True", log_text)
         self.assertEqual(recording_hook.entrypoints, ["test"])
         self.assertEqual(
             recording_hook.events,
@@ -407,6 +455,19 @@ class UiServiceTest(unittest.TestCase):
             recording_hook.summaries[0]["official_domain_product_count"],
             2,
         )
+        self.assertEqual(
+            recording_hook.summaries[0]["market_definition"]
+            ["comparison_level"],
+            "企业订阅产品",
+        )
+        result_summary = recording_hook.summaries[-1]
+        self.assertEqual(
+            result_summary["evidence_scope_counts"],
+            {"in_scope": 2, "out_of_scope": 0, "uncertain": 0},
+        )
+        self.assertTrue(result_summary["citations_valid"])
+        self.assertTrue(result_summary["scope_consistent"])
+        self.assertTrue(result_summary["comparison_usable"])
 
     def test_stage_summary_uses_user_facing_labels(self) -> None:
         summary = build_stage_summary(["planner", "researcher", "reporter"])
@@ -421,7 +482,7 @@ class UiServiceTest(unittest.TestCase):
         request = AnalysisRequest(
             target_product="Atlas Notes",
             competitors=["Beacon Docs"],
-            dimensions=["features"],
+            market_definition=_build_market_definition(),
             official_domains_by_product={
                 "Atlas Notes": ["example.com"],
                 "Beacon Docs": ["example.com"],
@@ -449,7 +510,7 @@ class UiServiceTest(unittest.TestCase):
         request = AnalysisRequest(
             target_product="Atlas Notes",
             competitors=["Beacon Docs"],
-            dimensions=["features"],
+            market_definition=_build_market_definition(),
         )
         with patch(
             "competitive_analysis_agent.ui_service._run_analysis_workflow",
@@ -475,7 +536,7 @@ class UiServiceTest(unittest.TestCase):
         request = AnalysisRequest(
             target_product="Atlas Notes",
             competitors=["Beacon Docs"],
-            dimensions=["features"],
+            market_definition=_build_market_definition(),
             official_domains_by_product={
                 "Atlas Notes": ["example.com"],
                 "Beacon Docs": ["example.com"],
@@ -559,6 +620,7 @@ class UiServiceTest(unittest.TestCase):
         state = {
             "target_product": "Atlas Notes",
             "competitors": ["Beacon Docs"],
+            "market_definition": _build_market_definition(),
             "dimensions": ["features"],
             "official_domains_by_product": {},
             "max_results_per_task": 3,

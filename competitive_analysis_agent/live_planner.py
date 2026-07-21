@@ -1,19 +1,15 @@
-"""使用 OpenAI 兼容模型运行 Planner 的手动 smoke test。"""
+"""运行确定性 Planner 的手动 smoke test。"""
 
 from __future__ import annotations
 
 import json
 
 from competitive_analysis_agent.config import Settings
-from competitive_analysis_agent.live_config import (
-    LIVE_MODEL_MAX_RETRIES,
-    build_provider_request_options,
-)
 from competitive_analysis_agent.planner import (
-    LangChainPlannerModel,
     Planner,
     PlannerInput,
 )
+from competitive_analysis_agent.schemas import MarketDefinition
 
 
 class LivePlannerConfigurationError(ValueError):
@@ -21,53 +17,28 @@ class LivePlannerConfigurationError(ValueError):
 
 
 def create_live_planner(settings: Settings) -> Planner:
-    """根据环境配置创建真实 Planner，不在代码中保存 API Key。"""
+    """创建无需模型配置的确定性 Planner。"""
 
-    missing_variables: list[str] = []
-    if settings.llm_api_key is None:
-        missing_variables.append("LLM_API_KEY")
-    if settings.llm_base_url is None:
-        missing_variables.append("LLM_BASE_URL")
-    if settings.llm_model is None:
-        missing_variables.append("LLM_MODEL")
-
-    if missing_variables:
-        missing_text = ", ".join(missing_variables)
-        raise LivePlannerConfigurationError(
-            f"Missing environment variables: {missing_text}"
-        )
-
-    # 延迟导入让不安装 llm 可选依赖的离线测试仍可运行。
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as error:
-        raise LivePlannerConfigurationError(
-            'Install model dependencies with: python -m pip install -e ".[llm]"'
-        ) from error
-
-    chat_model = ChatOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        model=settings.llm_model,
-        temperature=0,
-        max_tokens=512,
-        timeout=45,
-        # UI 路径允许一次供应商级重试，降低临时网络断开对整次分析的影响。
-        max_retries=LIVE_MODEL_MAX_RETRIES,
-        **build_provider_request_options(settings),
-    )
-    return Planner(LangChainPlannerModel(chat_model))
+    del settings
+    return Planner()
 
 
 def run_smoke_test(settings: Settings | None = None) -> list[dict[str, str]]:
-    """调用真实模型生成固定样例任务，并返回可打印的普通字典。"""
+    """生成固定样例任务，并返回可打印的普通字典。"""
 
     current_settings = settings or Settings.from_env()
     planner = create_live_planner(current_settings)
     planner_input = PlannerInput(
         target_product="Notion",
         competitors=["飞书"],
-        dimensions=["features", "pricing"],
+        market_definition=MarketDefinition(
+            market_name="企业知识管理工具",
+            product_category="SaaS 协作软件",
+            target_buyer="中型企业 IT 与业务负责人",
+            comparison_level="企业订阅产品",
+            core_dimensions=["features", "pricing"],
+            exclusions=["消费端套餐", "API 用量价格"],
+        ),
     )
 
     tasks = planner.plan(planner_input)
@@ -75,7 +46,7 @@ def run_smoke_test(settings: Settings | None = None) -> list[dict[str, str]]:
 
 
 def main() -> None:
-    """运行真实 Planner smoke test，并将任务输出为 JSON。"""
+    """运行 Planner smoke test，并将任务输出为 JSON。"""
 
     tasks = run_smoke_test()
     print(json.dumps(tasks, ensure_ascii=False, indent=2))
